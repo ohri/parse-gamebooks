@@ -3,21 +3,22 @@ import csv
 import re
 import os
 import urllib.request
+import glob
 
-def parse_lineup_line(line):
+def parse_lineup_line(line, visitor_team, home_team):
     """Parse a single lineup line into players for both teams."""
     players = []
 
-    # Each line has 4 sections: HOU Offense, HOU Defense, SEA Offense, SEA Defense
-    # Pattern: POS NUM NAME
-    pattern = r'([A-Z/]+)\s+(\d+)\s+([A-Z]\.[A-Za-z\'-]+)'
+    # Each line has 4 sections: Team1 Offense, Team1 Defense, Team2 Offense, Team2 Defense
+    # Pattern: POS NUM NAME (handles McCaffrey, O'Brien, To'oTo'o, Van Pran-Granger, etc.)
+    pattern = r"([A-Z/]+)\s+(\d+)\s+([A-Z]\.[A-Z](?:[a-z]+(?:[A-Z][a-z]+)*|[\'-][A-Za-z]+)(?:[\'-][A-Za-z]+)*(?:\s+[A-Z](?:[a-z]+(?:[A-Z][a-z]+)*|[\'-][A-Za-z]+)(?:[\'-][A-Za-z]+)*)*)"
 
     matches = re.findall(pattern, line)
 
     # There should be 4 matches per line (one for each column)
-    # Columns 0 and 1 are Houston, columns 2 and 3 are Seattle
+    # Columns 0 and 1 are visitor team, columns 2 and 3 are home team
     for idx, (position, number, name) in enumerate(matches):
-        team = 'Houston Texans' if idx < 2 else 'Seattle Seahawks'
+        team = visitor_team if idx < 2 else home_team
         players.append({
             'team': team,
             'name': name,
@@ -27,7 +28,7 @@ def parse_lineup_line(line):
 
     return players
 
-def parse_two_column_line(line):
+def parse_two_column_line(line, visitor_team, home_team):
     """Parse a line that has both teams in two columns."""
     players = []
 
@@ -45,24 +46,24 @@ def parse_two_column_line(line):
     left_half = line[:best_split]
     right_half = line[best_split:]
 
-    # Pattern: POS NUM NAME
-    pattern = r'([A-Z/]+)\s+(\d+)\s+([A-Z]\.[A-Za-z\'-]+)'
+    # Pattern: POS NUM NAME (handles McCaffrey, O'Brien, To'oTo'o, Van Pran-Granger, etc.)
+    pattern = r"([A-Z/]+)\s+(\d+)\s+([A-Z]\.[A-Z](?:[a-z]+(?:[A-Z][a-z]+)*|[\'-][A-Za-z]+)(?:[\'-][A-Za-z]+)*(?:\s+[A-Z](?:[a-z]+(?:[A-Z][a-z]+)*|[\'-][A-Za-z]+)(?:[\'-][A-Za-z]+)*)*)"
 
-    # Parse left half (Houston)
+    # Parse left half (visitor team)
     matches_left = re.findall(pattern, left_half)
     for position, number, name in matches_left:
         players.append({
-            'team': 'Houston Texans',
+            'team': visitor_team,
             'name': name,
             'position': position,
             'status': 'backup'
         })
 
-    # Parse right half (Seattle)
+    # Parse right half (home team)
     matches_right = re.findall(pattern, right_half)
     for position, number, name in matches_right:
         players.append({
-            'team': 'Seattle Seahawks',
+            'team': home_team,
             'name': name,
             'position': position,
             'status': 'backup'
@@ -74,8 +75,8 @@ def parse_player_list(text, team_name, status):
     """Parse a comma-separated or space-separated list of players."""
     players = []
 
-    # Pattern: POS NUM NAME
-    pattern = r'([A-Z/]+)\s+(\d+)\s+([A-Z]\.[A-Za-z\'-]+)'
+    # Pattern: POS NUM NAME (handles McCaffrey, O'Brien, To'oTo'o, Van Pran-Granger, etc.)
+    pattern = r"([A-Z/]+)\s+(\d+)\s+([A-Z]\.[A-Z](?:[a-z]+(?:[A-Z][a-z]+)*|[\'-][A-Za-z]+)(?:[\'-][A-Za-z]+)*(?:\s+[A-Z](?:[a-z]+(?:[A-Z][a-z]+)*|[\'-][A-Za-z]+)(?:[\'-][A-Za-z]+)*)*)"
 
     matches = re.findall(pattern, text)
 
@@ -129,12 +130,14 @@ def load_players_database(db_path='players.csv'):
                 first_name = row.get('first_name', '')
                 last_name = row.get('last_name', '')
                 team = row.get('latest_team', '')
+                position = row.get('position', '')
 
                 player_data = {
                     'gsis_id': gsis_id,
                     'display_name': display_name,
                     'short_name': short_name,
-                    'latest_team': team
+                    'latest_team': team,
+                    'position': position
                 }
 
                 # Store by multiple name formats with team
@@ -156,12 +159,13 @@ def load_players_database(db_path='players.csv'):
                 if first_name and last_name:
                     name_variants.append(f"{first_name[0]}.{last_name}")
 
-                # Store all variants
+                # Store all variants - use list to handle multiple players with same name
                 for name in name_variants:
                     if name:
                         key = (name.lower().strip(), team.upper())
                         if key not in players_db:
-                            players_db[key] = player_data
+                            players_db[key] = []
+                        players_db[key].append(player_data)
 
         print(f"Loaded {len(players_db)} player records from database")
         return players_db
@@ -207,33 +211,54 @@ def get_team_abbr(team_name):
     }
     return team_mapping.get(team_name, '')
 
-def match_player_to_database(player_name, team_name, players_db):
+def match_player_to_database(player_name, team_name, position, players_db):
     """Match a player to the database and return their GSIS ID."""
     team_abbr = get_team_abbr(team_name)
     player_name_lower = player_name.lower().strip()
 
-    # Strategy 1: Exact match with team
+    # Strategy 1: Exact match with team and position
     key = (player_name_lower, team_abbr)
     if key in players_db:
-        return players_db[key]['gsis_id']
+        player_list = players_db[key]
+        # Try to find exact position match first
+        for player_data in player_list:
+            db_position = player_data.get('position', '')
+            if db_position == position:
+                return player_data['gsis_id']
+        # If no position match, keep first candidate
+        candidate = player_list[0]['gsis_id'] if player_list else None
+    else:
+        candidate = None
 
-    # Strategy 2: Try without team (for players who may have changed teams)
-    for (name, team), data in players_db.items():
+    # Strategy 2: Try to find exact name match with same position (different team)
+    for (name, team), player_list in players_db.items():
         if name == player_name_lower:
-            return data['gsis_id']
+            for player_data in player_list:
+                db_position = player_data.get('position', '')
+                if db_position == position:
+                    return player_data['gsis_id']
 
-    # Strategy 3: Try with spaces removed (e.g., "N.Collins" vs "N. Collins")
+    # Strategy 3: Return the team match even if position doesn't match (from Strategy 1)
+    if candidate:
+        return candidate
+
+    # Strategy 4: Try without team and position check (for players who changed teams)
+    for (name, team), player_list in players_db.items():
+        if name == player_name_lower and player_list:
+            return player_list[0]['gsis_id']
+
+    # Strategy 5: Try with spaces removed (e.g., "N.Collins" vs "N. Collins")
     player_name_no_space = player_name_lower.replace(' ', '')
-    for (name, team), data in players_db.items():
-        if name.replace(' ', '') == player_name_no_space and team == team_abbr:
-            return data['gsis_id']
+    for (name, team), player_list in players_db.items():
+        if name.replace(' ', '') == player_name_no_space and team == team_abbr and player_list:
+            return player_list[0]['gsis_id']
 
-    # Strategy 4: Try partial match on last name only (as last resort)
+    # Strategy 6: Try partial match on last name only (as last resort)
     if '.' in player_name:
         last_name = player_name.split('.')[-1].lower().strip()
-        for (name, team), data in players_db.items():
-            if team == team_abbr and name.endswith(last_name):
-                return data['gsis_id']
+        for (name, team), player_list in players_db.items():
+            if team == team_abbr and name.endswith(last_name) and player_list:
+                return player_list[0]['gsis_id']
 
     return None
 
@@ -333,7 +358,7 @@ def extract_players_from_pdf(pdf_path):
 
             for line_idx in range(start_line, end_line):
                 line = lines[line_idx]
-                players = parse_lineup_line(line)
+                players = parse_lineup_line(line, visitor_team, home_team)
                 all_players.extend(players)
 
         # Parse substitutions (backups)
@@ -348,20 +373,20 @@ def extract_players_from_pdf(pdf_path):
                 # Split at "CB 1 D.Kendrick"
                 if 'CB 1 D.Kendrick' in first_sub_line:
                     parts = first_sub_line.split('CB 1 D.Kendrick')
-                    texans_part = parts[0]
-                    seahawks_part = 'CB 1 D.Kendrick' + parts[1]
+                    visitor_part = parts[0]
+                    home_part = 'CB 1 D.Kendrick' + parts[1]
 
-                    texans_players = parse_player_list(texans_part, 'Houston Texans', 'backup')
-                    seahawks_players = parse_player_list(seahawks_part, 'Seattle Seahawks', 'backup')
+                    visitor_players = parse_player_list(visitor_part, visitor_team, 'backup')
+                    home_players = parse_player_list(home_part, home_team, 'backup')
 
-                    all_players.extend(texans_players)
-                    all_players.extend(seahawks_players)
+                    all_players.extend(visitor_players)
+                    all_players.extend(home_players)
 
             # Process remaining substitution lines (they have both teams)
             for line_idx in range(first_sub_line_idx + 1, not_active_idx):
                 line = lines[line_idx]
                 if 'Did Not Play' not in line:
-                    players = parse_two_column_line(line)
+                    players = parse_two_column_line(line, visitor_team, home_team)
                     all_players.extend(players)
 
         # Parse "Did Not Play" section
@@ -373,14 +398,14 @@ def extract_players_from_pdf(pdf_path):
                 # Split at "QB 2 D.Lock"
                 if 'QB 2 D.Lock' in dnp_line:
                     parts = dnp_line.split('QB 2 D.Lock')
-                    texans_dnp_text = parts[0]
-                    seahawks_dnp_text = 'QB 2 D.Lock' + parts[1]
+                    visitor_dnp_text = parts[0]
+                    home_dnp_text = 'QB 2 D.Lock' + parts[1]
 
-                    texans_dnp = parse_player_list(texans_dnp_text, 'Houston Texans', 'did_not_play')
-                    seahawks_dnp = parse_player_list(seahawks_dnp_text, 'Seattle Seahawks', 'did_not_play')
+                    visitor_dnp = parse_player_list(visitor_dnp_text, visitor_team, 'did_not_play')
+                    home_dnp = parse_player_list(home_dnp_text, home_team, 'did_not_play')
 
-                    all_players.extend(texans_dnp)
-                    all_players.extend(seahawks_dnp)
+                    all_players.extend(visitor_dnp)
+                    all_players.extend(home_dnp)
 
         # Parse inactive players
         if not_active_idx:
@@ -392,28 +417,28 @@ def extract_players_from_pdf(pdf_path):
                 # Split at "3QB 6 J.Milroe"
                 if '3QB 6 J.Milroe' in inactive_line:
                     parts = inactive_line.split('3QB 6 J.Milroe')
-                    texans_inactive_text = parts[0]
-                    seahawks_inactive_text = '3QB 6 J.Milroe' + parts[1]
+                    visitor_inactive_text = parts[0]
+                    home_inactive_text = '3QB 6 J.Milroe' + parts[1]
 
-                    texans_inactive = parse_player_list(texans_inactive_text, 'Houston Texans', 'inactive')
-                    seahawks_inactive = parse_player_list(seahawks_inactive_text, 'Seattle Seahawks', 'inactive')
+                    visitor_inactive = parse_player_list(visitor_inactive_text, visitor_team, 'inactive')
+                    home_inactive = parse_player_list(home_inactive_text, home_team, 'inactive')
 
-                    all_players.extend(texans_inactive)
-                    all_players.extend(seahawks_inactive)
+                    all_players.extend(visitor_inactive)
+                    all_players.extend(home_inactive)
 
             # Process second inactive line if it exists
             second_inactive_idx = not_active_idx + 2
             if second_inactive_idx < len(lines) and 'Field Goals' not in lines[second_inactive_idx]:
-                # This line likely only has Seattle inactives
+                # This line likely only has home team inactives
                 inactive_line2 = lines[second_inactive_idx]
-                # Check if it starts with a position (Seattle) or continues Houston
-                # If it starts with uppercase letter followed by slash or space and number, it's likely Seattle
+                # Check if it starts with a position (home team) or continues visitor team
+                # If it starts with uppercase letter followed by slash or space and number, it's likely home team
                 if re.match(r'^[A-Z]', inactive_line2):
-                    seahawks_inactive2 = parse_player_list(inactive_line2, 'Seattle Seahawks', 'inactive')
-                    all_players.extend(seahawks_inactive2)
+                    home_inactive2 = parse_player_list(inactive_line2, home_team, 'inactive')
+                    all_players.extend(home_inactive2)
                 else:
-                    texans_inactive2 = parse_player_list(inactive_line2, 'Houston Texans', 'inactive')
-                    all_players.extend(texans_inactive2)
+                    visitor_inactive2 = parse_player_list(inactive_line2, visitor_team, 'inactive')
+                    all_players.extend(visitor_inactive2)
 
     return all_players, game_score, season, teams
 
@@ -428,10 +453,33 @@ def get_opponent(team, teams):
 def save_to_sql(players, output_path, week, season, teams, game_score=None):
     """Save player data as SQL statements."""
     with open(output_path, 'w', encoding='utf-8') as sqlfile:
-        # Write game score as a comment if available
+        # Write game score as SQL command if available
         if game_score:
             sqlfile.write(f"-- {game_score}\n")
-            sqlfile.write(f"-- Week {week}, Season {season}\n")
+            sqlfile.write(f"-- Week {week}, Season {season}\n\n")
+
+            # Parse the game score string (format: "Team1 Score1, Team2 Score2")
+            visitor_team = teams.get('visitor', '')
+            home_team = teams.get('home', '')
+
+            # Extract scores from game_score string
+            parts = game_score.split(',')
+            visitor_score = '0'
+            home_score = '0'
+
+            if len(parts) >= 2:
+                # Extract visitor score (last number in first part)
+                visitor_parts = parts[0].strip().split()
+                if visitor_parts:
+                    visitor_score = visitor_parts[-1]
+
+                # Extract home score (last number in second part)
+                home_parts = parts[1].strip().split()
+                if home_parts:
+                    home_score = home_parts[-1]
+
+            # Generate SQL command with full team names
+            sqlfile.write(f"exec pickem.set_nfl_score( {season}, {week}, {visitor_score}, '{visitor_team}', {home_score}, '{home_team}' );\n")
             sqlfile.write("\n")
 
         # Write SQL statements
@@ -455,7 +503,13 @@ def save_to_sql(players, output_path, week, season, teams, game_score=None):
             # Generate SQL statement
             sql = f"exec stats.find_or_create_rawstat_gsis('{gsis_id}', '{team}', '{opponent}', {week}, {season}, '{position}', '{status}');"
 
-            sqlfile.write(sql + "\n")
+            # Check if GSIS ID is valid (standard format: 00-XXXXXXX or old format like RIV553722)
+            if gsis_id and (gsis_id.startswith('00-') or (len(gsis_id) >= 8 and gsis_id[:3].isalpha() and gsis_id[3:].isdigit())):
+                # Valid GSIS ID - write normally
+                sqlfile.write(sql + "\n")
+            else:
+                # Invalid or missing GSIS ID - comment it out
+                sqlfile.write(f"-- INVALID GSIS: {name} ({team}) - {sql}\n")
 
 def save_to_csv(players, output_path, game_score=None):
     """Save player data to CSV file."""
@@ -481,101 +535,136 @@ if __name__ == '__main__':
     parser.add_argument('--season', '-s', type=int, help='Season year (defaults to year from PDF)')
     args = parser.parse_args()
 
-    pdf_path = args.pdf_file
+    pdf_pattern = args.pdf_file
     week = args.week
 
-    # Generate output filename from input filename (change to .sql)
-    output_path = os.path.splitext(pdf_path)[0] + '.sql'
+    # Expand glob pattern to get list of PDF files
+    pdf_files = glob.glob(pdf_pattern)
 
-    print(f"Extracting player data from {pdf_path}...")
-    players, game_score, season, teams = extract_players_from_pdf(pdf_path)
-
-    # Use season from command line if provided, otherwise use from PDF
-    if args.season:
-        season = args.season
-        print(f"Using season from command line: {season}")
-    elif season:
-        print(f"Using season from PDF: {season}")
-    else:
-        print("ERROR: Could not determine season from PDF. Please provide --season parameter.")
+    if not pdf_files:
+        print(f"ERROR: No files found matching pattern '{pdf_pattern}'")
         exit(1)
 
-    if game_score:
-        print(f"Game Score: {game_score}")
+    print(f"Found {len(pdf_files)} PDF file(s) to process\n")
 
-    print(f"Found {len(players)} players")
-
-    # Download and load players database
+    # Download and load players database once (outside the loop)
     db_path = 'players.csv'
     download_players_database(db_path)
     players_db = load_players_database(db_path)
 
-    # Match players to database and add GSIS IDs
-    print("\nMatching players to database...")
-    matched_count = 0
-    unmatched_players = []
-    non_standard_gsis = []
+    # Process each PDF file
+    for file_idx, pdf_path in enumerate(pdf_files, 1):
+        print(f"{'='*80}")
+        print(f"Processing file {file_idx}/{len(pdf_files)}: {pdf_path}")
+        print(f"{'='*80}")
 
-    for player in players:
-        gsis_id = match_player_to_database(player['name'], player['team'], players_db)
-        player['gsis_id'] = gsis_id if gsis_id else ''
+        # Generate output filename from input filename (change to .sql)
+        output_path = os.path.splitext(pdf_path)[0] + '.sql'
 
-        if gsis_id:
-            matched_count += 1
-            # Check if GSIS ID follows standard format (00-XXXXXXX)
-            if not gsis_id.startswith('00-'):
-                non_standard_gsis.append({
-                    'name': player['name'],
-                    'team': player['team'],
-                    'gsis_id': gsis_id,
-                    'position': player['position'],
-                    'status': player['status']
-                })
+        print(f"Extracting player data from {pdf_path}...")
+        players, game_score, season, teams = extract_players_from_pdf(pdf_path)
+
+        # Use season from command line if provided, otherwise use from PDF
+        if args.season:
+            season = args.season
+            print(f"Using season from command line: {season}")
+        elif season:
+            print(f"Using season from PDF: {season}")
         else:
-            unmatched_players.append(f"{player['name']} ({player['team']})")
+            print("ERROR: Could not determine season from PDF. Please provide --season parameter.")
+            continue  # Skip this file and move to next
 
-    print(f"Matched {matched_count}/{len(players)} players ({matched_count*100//len(players)}%)")
+        if game_score:
+            print(f"Game Score: {game_score}")
 
-    if unmatched_players:
-        print(f"\nUnmatched players ({len(unmatched_players)}):")
-        for name in unmatched_players[:10]:  # Show first 10
-            print(f"  - {name}")
-        if len(unmatched_players) > 10:
-            print(f"  ... and {len(unmatched_players) - 10} more")
+        print(f"Found {len(players)} players")
 
-    if non_standard_gsis:
-        print(f"\n!!! WARNING: {len(non_standard_gsis)} player(s) with non-standard GSIS ID format (will be excluded):")
-        for p in non_standard_gsis[:15]:  # Show first 15
-            print(f"  - {p['name']:20} ({p['team']:20}) | GSIS: {p['gsis_id']:15} | {p['position']:3} {p['status']}")
-        if len(non_standard_gsis) > 15:
-            print(f"  ... and {len(non_standard_gsis) - 15} more")
+        # Match players to database and add GSIS IDs
+        print("\nMatching players to database...")
+        matched_count = 0
+        unmatched_players = []
+        non_standard_gsis = []
 
-    # Filter out players with non-standard GSIS IDs
-    players_with_standard_gsis = [p for p in players if p.get('gsis_id', '').startswith('00-')]
+        for player in players:
+            gsis_id = match_player_to_database(player['name'], player['team'], player['position'], players_db)
+            player['gsis_id'] = gsis_id if gsis_id else ''
 
-    if len(players_with_standard_gsis) < len(players):
-        print(f"\nExcluded {len(players) - len(players_with_standard_gsis)} player(s) without standard GSIS ID")
+            if gsis_id:
+                matched_count += 1
+                # Check if GSIS ID is in a valid format
+                is_standard = gsis_id.startswith('00-')
+                is_old_format = len(gsis_id) >= 8 and gsis_id[:3].isalpha() and gsis_id[3:].isdigit()
+                if not is_standard and not is_old_format:
+                    non_standard_gsis.append({
+                        'name': player['name'],
+                        'team': player['team'],
+                        'gsis_id': gsis_id,
+                        'position': player['position'],
+                        'status': player['status']
+                    })
+            else:
+                unmatched_players.append(f"{player['name']} ({player['team']})")
 
-    print(f"\nGenerating SQL statements for {len(players_with_standard_gsis)} players...")
-    print(f"Week: {week}, Season: {season}")
-    print(f"Saving to {output_path}...")
-    save_to_sql(players_with_standard_gsis, output_path, week, season, teams, game_score)
+        print(f"Matched {matched_count}/{len(players)} players ({matched_count*100//len(players)}%)")
 
-    print("Done!")
-    print(f"\nFirst few entries:")
-    for player in players_with_standard_gsis[:10]:
-        gsis = player.get('gsis_id', '')[:10] + '...' if len(player.get('gsis_id', '')) > 10 else player.get('gsis_id', 'N/A')
-        print(f"  {gsis:13} | {player['team']:20} | {player['name']:20} | {player['position']:5} | {player['status']}")
+        if unmatched_players:
+            print(f"\nUnmatched players ({len(unmatched_players)}):")
+            for name in unmatched_players[:10]:  # Show first 10
+                print(f"  - {name}")
+            if len(unmatched_players) > 10:
+                print(f"  ... and {len(unmatched_players) - 10} more")
 
-    # Show stats by team (for saved players only)
-    texans_count = len([p for p in players_with_standard_gsis if p['team'] == 'Houston Texans'])
-    seahawks_count = len([p for p in players_with_standard_gsis if p['team'] == 'Seattle Seahawks'])
-    print(f"\nHouston Texans: {texans_count} players")
-    print(f"Seattle Seahawks: {seahawks_count} players")
+        if non_standard_gsis:
+            print(f"\n!!! WARNING: {len(non_standard_gsis)} player(s) with non-standard GSIS ID format (will be commented out):")
+            for p in non_standard_gsis[:15]:  # Show first 15
+                print(f"  - {p['name']:20} ({p['team']:20}) | GSIS: {p['gsis_id']:15} | {p['position']:3} {p['status']}")
+            if len(non_standard_gsis) > 15:
+                print(f"  ... and {len(non_standard_gsis) - 15} more")
 
-    # Show stats by status (for saved players only)
-    starters = len([p for p in players_with_standard_gsis if p['status'] == 'starter'])
-    backups = len([p for p in players_with_standard_gsis if p['status'] == 'backup'])
-    inactive = len([p for p in players_with_standard_gsis if p['status'] == 'inactive'])
-    dnp = len([p for p in players_with_standard_gsis if p['status'] == 'did_not_play'])
-    print(f"\nStarters: {starters}, Backups: {backups}, Inactive: {inactive}, Did Not Play: {dnp}")
+        # Count players with valid GSIS IDs (both formats)
+        def is_valid_gsis(gsis_id):
+            if not gsis_id:
+                return False
+            # Standard format: 00-XXXXXXX
+            if gsis_id.startswith('00-'):
+                return True
+            # Old format: 3 letters + digits (e.g., RIV553722)
+            if len(gsis_id) >= 8 and gsis_id[:3].isalpha() and gsis_id[3:].isdigit():
+                return True
+            return False
+
+        players_with_valid_gsis = [p for p in players if is_valid_gsis(p.get('gsis_id', ''))]
+        commented_out_count = len(players) - len(players_with_valid_gsis)
+
+        print(f"\nGenerating SQL statements...")
+        print(f"  Valid entries: {len(players_with_valid_gsis)}")
+        if commented_out_count > 0:
+            print(f"  Commented out (invalid GSIS): {commented_out_count}")
+        print(f"Week: {week}, Season: {season}")
+        print(f"Saving to {output_path}...")
+
+        # Save all players (function will comment out invalid ones)
+        save_to_sql(players, output_path, week, season, teams, game_score)
+
+        print("Done!")
+
+        # Show stats by team (for all players)
+        team_counts = {}
+        for player in players:
+            team = player['team']
+            team_counts[team] = team_counts.get(team, 0) + 1
+
+        print(f"\nPlayers by team:")
+        for team, count in team_counts.items():
+            print(f"  {team}: {count} players")
+
+        # Show stats by status (for all players)
+        starters = len([p for p in players if p['status'] == 'starter'])
+        backups = len([p for p in players if p['status'] == 'backup'])
+        inactive = len([p for p in players if p['status'] == 'inactive'])
+        dnp = len([p for p in players if p['status'] == 'did_not_play'])
+        print(f"\nStarters: {starters}, Backups: {backups}, Inactive: {inactive}, Did Not Play: {dnp}")
+        print()
+
+    print(f"{'='*80}")
+    print(f"All done! Processed {len(pdf_files)} file(s)")
