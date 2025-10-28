@@ -10,8 +10,8 @@ def parse_lineup_line(line, visitor_team, home_team):
     players = []
 
     # Each line has 4 sections: Team1 Offense, Team1 Defense, Team2 Offense, Team2 Defense
-    # Pattern: POS NUM NAME (handles McCaffrey, O'Brien, To'oTo'o, Van Pran-Granger, etc.)
-    pattern = r"([A-Z/]+)\s+(\d+)\s+([A-Z]\.[A-Z](?:[a-z]+(?:[A-Z][a-z]+)*|[\'-][A-Za-z]+)(?:[\'-][A-Za-z]+)*(?:\s+[A-Z](?:[a-z]+(?:[A-Z][a-z]+)*|[\'-][A-Za-z]+)(?:[\'-][A-Za-z]+)*)*)"
+    # Pattern: POS NUM NAME (handles Jo.Phillips, McCaffrey, O'Brien, To'oTo'o, Van Pran-Granger, etc.)
+    pattern = r"([A-Z/]+)\s+(\d+)\s+([A-Z][a-z]*\.[A-Z](?:[a-z]+(?:[A-Z][a-z]+)*|[\'-][A-Za-z]+)(?:[\'-][A-Za-z]+)*(?:\s+[A-Z](?:[a-z]+(?:[A-Z][a-z]+)*|[\'-][A-Za-z]+)(?:[\'-][A-Za-z]+)*)*)"
 
     matches = re.findall(pattern, line)
 
@@ -46,8 +46,8 @@ def parse_two_column_line(line, visitor_team, home_team):
     left_half = line[:best_split]
     right_half = line[best_split:]
 
-    # Pattern: POS NUM NAME (handles McCaffrey, O'Brien, To'oTo'o, Van Pran-Granger, etc.)
-    pattern = r"([A-Z/]+)\s+(\d+)\s+([A-Z]\.[A-Z](?:[a-z]+(?:[A-Z][a-z]+)*|[\'-][A-Za-z]+)(?:[\'-][A-Za-z]+)*(?:\s+[A-Z](?:[a-z]+(?:[A-Z][a-z]+)*|[\'-][A-Za-z]+)(?:[\'-][A-Za-z]+)*)*)"
+    # Pattern: POS NUM NAME (handles Jo.Phillips, McCaffrey, O'Brien, To'oTo'o, Van Pran-Granger, etc.)
+    pattern = r"([A-Z/]+)\s+(\d+)\s+([A-Z][a-z]*\.[A-Z](?:[a-z]+(?:[A-Z][a-z]+)*|[\'-][A-Za-z]+)(?:[\'-][A-Za-z]+)*(?:\s+[A-Z](?:[a-z]+(?:[A-Z][a-z]+)*|[\'-][A-Za-z]+)(?:[\'-][A-Za-z]+)*)*)"
 
     # Parse left half (visitor team)
     matches_left = re.findall(pattern, left_half)
@@ -75,8 +75,8 @@ def parse_player_list(text, team_name, status):
     """Parse a comma-separated or space-separated list of players."""
     players = []
 
-    # Pattern: POS NUM NAME (handles McCaffrey, O'Brien, To'oTo'o, Van Pran-Granger, etc.)
-    pattern = r"([A-Z/]+)\s+(\d+)\s+([A-Z]\.[A-Z](?:[a-z]+(?:[A-Z][a-z]+)*|[\'-][A-Za-z]+)(?:[\'-][A-Za-z]+)*(?:\s+[A-Z](?:[a-z]+(?:[A-Z][a-z]+)*|[\'-][A-Za-z]+)(?:[\'-][A-Za-z]+)*)*)"
+    # Pattern: POS NUM NAME (handles Jo.Phillips, McCaffrey, O'Brien, To'oTo'o, Van Pran-Granger, etc.)
+    pattern = r"([A-Z/]+)\s+(\d+)\s+([A-Z][a-z]*\.[A-Z](?:[a-z]+(?:[A-Z][a-z]+)*|[\'-][A-Za-z]+)(?:[\'-][A-Za-z]+)*(?:\s+[A-Z](?:[a-z]+(?:[A-Z][a-z]+)*|[\'-][A-Za-z]+)(?:[\'-][A-Za-z]+)*)*)"
 
     matches = re.findall(pattern, text)
 
@@ -124,9 +124,10 @@ def load_players_database(db_path='players.csv'):
                 if not gsis_id:
                     continue
 
-                # Only consider active players
+                # Only consider active players or developmental players (where both status and ngs_status are DEV)
                 status = row.get('status', '')
-                if status != 'ACT':
+                ngs_status = row.get('ngs_status', '')
+                if not (status == 'ACT' or (status == 'DEV' and ngs_status == 'DEV')):
                     continue
 
                 # Get all name variants
@@ -362,6 +363,9 @@ def extract_players_from_pdf(pdf_path):
 
     with pdfplumber.open(pdf_path) as pdf:
         first_page = pdf.pages[0]
+        page_width = first_page.width
+        page_height = first_page.height
+
         text = first_page.extract_text()
         lines = text.split('\n')
 
@@ -403,84 +407,107 @@ def extract_players_from_pdf(pdf_path):
                 players = parse_lineup_line(line, visitor_team, home_team)
                 all_players.extend(players)
 
-        # Parse substitutions (backups)
-        if substitutions_idx and not_active_idx:
-            # Line after "Substitutions Substitutions" header
-            first_sub_line_idx = substitutions_idx + 1
+        # Parse substitutions (backups) - use bbox to split left/right halves
+        if substitutions_idx and did_not_play_idx:
+            # Get y-coordinates for substitutions section
+            sub_start_y = None
+            sub_end_y = None
+            words = first_page.extract_words()
+            for word in words:
+                if word['text'] == 'Substitutions':
+                    sub_start_y = word['top']
+                if 'Did' in word['text'] and 'Not' in first_page.extract_text()[first_page.extract_text().find(word['text']):first_page.extract_text().find(word['text'])+20]:
+                    sub_end_y = word['top']
+                    break
 
-            # Process the first substitutions line differently (it's clearly split)
-            if first_sub_line_idx < len(lines):
-                first_sub_line = lines[first_sub_line_idx]
+            if sub_start_y and sub_end_y:
+                # Extract left half (visitor) and right half (home)
+                bbox_left = (0, sub_start_y, page_width/2, sub_end_y)
+                bbox_right = (page_width/2, sub_start_y, page_width, sub_end_y)
 
-                # Split at "CB 1 D.Kendrick"
-                if 'CB 1 D.Kendrick' in first_sub_line:
-                    parts = first_sub_line.split('CB 1 D.Kendrick')
-                    visitor_part = parts[0]
-                    home_part = 'CB 1 D.Kendrick' + parts[1]
+                visitor_text = first_page.within_bbox(bbox_left).extract_text()
+                home_text = first_page.within_bbox(bbox_right).extract_text()
 
-                    visitor_players = parse_player_list(visitor_part, visitor_team, 'backup')
-                    home_players = parse_player_list(home_part, home_team, 'backup')
+                # Remove the "Substitutions" header
+                visitor_text = visitor_text.replace('Substitutions', '').strip()
+                home_text = home_text.replace('Substitutions', '').strip()
 
-                    all_players.extend(visitor_players)
-                    all_players.extend(home_players)
+                visitor_players = parse_player_list(visitor_text, visitor_team, 'backup')
+                home_players = parse_player_list(home_text, home_team, 'backup')
 
-            # Process remaining substitution lines (they have both teams)
-            for line_idx in range(first_sub_line_idx + 1, not_active_idx):
-                line = lines[line_idx]
-                if 'Did Not Play' not in line:
-                    players = parse_two_column_line(line, visitor_team, home_team)
-                    all_players.extend(players)
+                all_players.extend(visitor_players)
+                all_players.extend(home_players)
 
-        # Parse "Did Not Play" section
+        # Parse "Did Not Play" section - use bbox to split left/right halves
         if did_not_play_idx and not_active_idx:
-            dnp_line_idx = did_not_play_idx + 1
-            if dnp_line_idx < len(lines):
-                dnp_line = lines[dnp_line_idx]
+            # Get y-coordinates for DNP section
+            dnp_start_y = None
+            dnp_end_y = None
+            words = first_page.extract_words()
+            for word in words:
+                if word['text'] == 'Did' and dnp_start_y is None:
+                    # Check if this is "Did Not Play"
+                    idx = words.index(word)
+                    if idx + 2 < len(words) and words[idx+1]['text'] == 'Not' and words[idx+2]['text'] == 'Play':
+                        dnp_start_y = word['top']
+                if word['text'] == 'Not' and 'Active' in [w['text'] for w in words[words.index(word):words.index(word)+3]]:
+                    dnp_end_y = word['top']
+                    break
 
-                # Split at "QB 2 D.Lock"
-                if 'QB 2 D.Lock' in dnp_line:
-                    parts = dnp_line.split('QB 2 D.Lock')
-                    visitor_dnp_text = parts[0]
-                    home_dnp_text = 'QB 2 D.Lock' + parts[1]
+            if dnp_start_y and dnp_end_y:
+                # Extract left half (visitor) and right half (home)
+                bbox_left = (0, dnp_start_y, page_width/2, dnp_end_y)
+                bbox_right = (page_width/2, dnp_start_y, page_width, dnp_end_y)
 
-                    visitor_dnp = parse_player_list(visitor_dnp_text, visitor_team, 'did_not_play')
-                    home_dnp = parse_player_list(home_dnp_text, home_team, 'did_not_play')
+                visitor_text = first_page.within_bbox(bbox_left).extract_text()
+                home_text = first_page.within_bbox(bbox_right).extract_text()
 
-                    all_players.extend(visitor_dnp)
-                    all_players.extend(home_dnp)
+                # Remove headers
+                visitor_text = visitor_text.replace('Did Not Play', '').strip()
+                home_text = home_text.replace('Did Not Play', '').strip()
 
-        # Parse inactive players
+                visitor_players = parse_player_list(visitor_text, visitor_team, 'did_not_play')
+                home_players = parse_player_list(home_text, home_team, 'did_not_play')
+
+                all_players.extend(visitor_players)
+                all_players.extend(home_players)
+
+        # Parse inactive players - use bbox to split left/right halves
         if not_active_idx:
-            # Process first inactive line
-            first_inactive_idx = not_active_idx + 1
-            if first_inactive_idx < len(lines):
-                inactive_line = lines[first_inactive_idx]
+            # Get y-coordinates for Not Active section
+            na_start_y = None
+            na_end_y = None
+            words = first_page.extract_words()
+            for word in words:
+                if word['text'] == 'Not' and na_start_y is None:
+                    # Check if this is "Not Active"
+                    idx = words.index(word)
+                    if idx + 1 < len(words) and words[idx+1]['text'] == 'Active':
+                        na_start_y = word['top']
+                if word['text'] == 'Field' and na_start_y is not None:
+                    # Check if this is "Field Goals"
+                    idx = words.index(word)
+                    if idx + 1 < len(words) and words[idx+1]['text'] == 'Goals':
+                        na_end_y = word['top']
+                        break
 
-                # Split at "3QB 6 J.Milroe"
-                if '3QB 6 J.Milroe' in inactive_line:
-                    parts = inactive_line.split('3QB 6 J.Milroe')
-                    visitor_inactive_text = parts[0]
-                    home_inactive_text = '3QB 6 J.Milroe' + parts[1]
+            if na_start_y and na_end_y:
+                # Extract left half (visitor) and right half (home)
+                bbox_left = (0, na_start_y, page_width/2, na_end_y)
+                bbox_right = (page_width/2, na_start_y, page_width, na_end_y)
 
-                    visitor_inactive = parse_player_list(visitor_inactive_text, visitor_team, 'inactive')
-                    home_inactive = parse_player_list(home_inactive_text, home_team, 'inactive')
+                visitor_text = first_page.within_bbox(bbox_left).extract_text()
+                home_text = first_page.within_bbox(bbox_right).extract_text()
 
-                    all_players.extend(visitor_inactive)
-                    all_players.extend(home_inactive)
+                # Remove headers
+                visitor_text = visitor_text.replace('Not Active', '').strip()
+                home_text = home_text.replace('Not Active', '').strip()
 
-            # Process second inactive line if it exists
-            second_inactive_idx = not_active_idx + 2
-            if second_inactive_idx < len(lines) and 'Field Goals' not in lines[second_inactive_idx]:
-                # This line likely only has home team inactives
-                inactive_line2 = lines[second_inactive_idx]
-                # Check if it starts with a position (home team) or continues visitor team
-                # If it starts with uppercase letter followed by slash or space and number, it's likely home team
-                if re.match(r'^[A-Z]', inactive_line2):
-                    home_inactive2 = parse_player_list(inactive_line2, home_team, 'inactive')
-                    all_players.extend(home_inactive2)
-                else:
-                    visitor_inactive2 = parse_player_list(inactive_line2, visitor_team, 'inactive')
-                    all_players.extend(visitor_inactive2)
+                visitor_players = parse_player_list(visitor_text, visitor_team, 'inactive')
+                home_players = parse_player_list(home_text, home_team, 'inactive')
+
+                all_players.extend(visitor_players)
+                all_players.extend(home_players)
 
     return all_players, game_score, season, teams
 
