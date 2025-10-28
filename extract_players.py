@@ -108,12 +108,13 @@ def download_players_database(output_path='players.csv'):
         return None
 
 def load_players_database(db_path='players.csv'):
-    """Load the players database and create a lookup dictionary."""
+    """Load the players database and create lookup dictionaries."""
     players_db = {}
+    short_name_db = {}  # Separate lookup for short_name (preferred)
 
     if not os.path.exists(db_path):
         print(f"Players database not found at {db_path}")
-        return players_db
+        return players_db, short_name_db
 
     try:
         with open(db_path, 'r', encoding='utf-8') as f:
@@ -145,16 +146,19 @@ def load_players_database(db_path='players.csv'):
                     'position': position
                 }
 
-                # Store by multiple name formats with team
+                # Store short_name in separate database (preferred)
+                if short_name:
+                    key = (short_name.lower().strip(), team.upper())
+                    if key not in short_name_db:
+                        short_name_db[key] = []
+                    short_name_db[key].append(player_data)
+
+                # Store other name variants in main database
                 name_variants = []
 
                 # Add display name
                 if display_name:
                     name_variants.append(display_name)
-
-                # Add short name from database (e.g., "T.Woolen")
-                if short_name:
-                    name_variants.append(short_name)
 
                 # Add football name
                 if football_name:
@@ -172,11 +176,11 @@ def load_players_database(db_path='players.csv'):
                             players_db[key] = []
                         players_db[key].append(player_data)
 
-        print(f"Loaded {len(players_db)} player records from database")
-        return players_db
+        print(f"Loaded {len(short_name_db)} short_name entries, {len(players_db)} other name variants")
+        return short_name_db, players_db
     except Exception as e:
         print(f"Error loading players database: {e}")
-        return {}
+        return {}, {}
 
 def get_team_abbr(team_name):
     """Convert full team name to abbreviation."""
@@ -216,53 +220,87 @@ def get_team_abbr(team_name):
     }
     return team_mapping.get(team_name, '')
 
-def match_player_to_database(player_name, team_name, position, players_db):
+def match_player_to_database(player_name, team_name, position, short_name_db, players_db):
     """Match a player to the database and return their GSIS ID and match strategy."""
     team_abbr = get_team_abbr(team_name)
     player_name_lower = player_name.lower().strip()
 
-    # Strategy 1: Exact match with team and position
+    # Strategy 1: Try short_name first (preferred)
     key = (player_name_lower, team_abbr)
+    if key in short_name_db:
+        player_list = short_name_db[key]
+        # Try to find exact position match first
+        for player_data in player_list:
+            db_position = player_data.get('position', '')
+            if db_position == position:
+                return player_data['gsis_id'], 'short_name_team_position'
+        # If no position match, keep first candidate
+        if player_list:
+            return player_list[0]['gsis_id'], 'short_name_team'
+
+    # Strategy 2: Exact match with team and position (other name variants)
     if key in players_db:
         player_list = players_db[key]
         # Try to find exact position match first
         for player_data in player_list:
             db_position = player_data.get('position', '')
             if db_position == position:
-                return player_data['gsis_id'], 'exact_name_team_position'
+                return player_data['gsis_id'], 'other_name_team_position'
         # If no position match, keep first candidate
         candidate = player_list[0]['gsis_id'] if player_list else None
     else:
         candidate = None
 
-    # Strategy 2: Return the team match even if position doesn't match (from Strategy 1)
+    # Strategy 3: Return the team match even if position doesn't match (from Strategy 2)
     if candidate:
-        return candidate, 'exact_name_team'
+        return candidate, 'other_name_team'
 
-    # Strategy 3: Try with spaces removed (e.g., "N.Collins" vs "N. Collins")
+    # Strategy 4: Try with spaces removed in short_name (e.g., "N.Collins" vs "N. Collins")
     player_name_no_space = player_name_lower.replace(' ', '')
+    for (name, team), player_list in short_name_db.items():
+        if name.replace(' ', '') == player_name_no_space and team == team_abbr and player_list:
+            # Check position first
+            for player_data in player_list:
+                db_position = player_data.get('position', '')
+                if db_position == position:
+                    return player_data['gsis_id'], 'short_name_no_spaces_position'
+            # Return first match if position doesn't match
+            return player_list[0]['gsis_id'], 'short_name_no_spaces'
+
+    # Strategy 5: Try with spaces removed in other names
     for (name, team), player_list in players_db.items():
         if name.replace(' ', '') == player_name_no_space and team == team_abbr and player_list:
             # Check position first
             for player_data in player_list:
                 db_position = player_data.get('position', '')
                 if db_position == position:
-                    return player_data['gsis_id'], 'name_no_spaces_position'
+                    return player_data['gsis_id'], 'other_name_no_spaces_position'
             # Return first match if position doesn't match
-            return player_list[0]['gsis_id'], 'name_no_spaces'
+            return player_list[0]['gsis_id'], 'other_name_no_spaces'
 
-    # Strategy 4: Try partial match on last name only (as last resort, still requires team)
+    # Strategy 6: Try partial match on last name only (as last resort, still requires team)
     if '.' in player_name:
         last_name = player_name.split('.')[-1].lower().strip()
+        # Check short_name first
+        for (name, team), player_list in short_name_db.items():
+            if team == team_abbr and name.endswith(last_name) and player_list:
+                # Check position first
+                for player_data in player_list:
+                    db_position = player_data.get('position', '')
+                    if db_position == position:
+                        return player_data['gsis_id'], 'short_name_partial_lastname_position'
+                # Return first match if position doesn't match
+                return player_list[0]['gsis_id'], 'short_name_partial_lastname'
+        # Then check other names
         for (name, team), player_list in players_db.items():
             if team == team_abbr and name.endswith(last_name) and player_list:
                 # Check position first
                 for player_data in player_list:
                     db_position = player_data.get('position', '')
                     if db_position == position:
-                        return player_data['gsis_id'], 'partial_lastname_position'
+                        return player_data['gsis_id'], 'other_name_partial_lastname_position'
                 # Return first match if position doesn't match
-                return player_list[0]['gsis_id'], 'partial_lastname'
+                return player_list[0]['gsis_id'], 'other_name_partial_lastname'
 
     return None, None
 
@@ -552,7 +590,7 @@ if __name__ == '__main__':
     # Download and load players database once (outside the loop)
     db_path = 'players.csv'
     download_players_database(db_path)
-    players_db = load_players_database(db_path)
+    short_name_db, players_db = load_players_database(db_path)
     print()  # Blank line after database loading
 
     # Process each PDF file
@@ -574,7 +612,7 @@ if __name__ == '__main__':
         unmatched_players = []
 
         for player in players:
-            gsis_id, strategy = match_player_to_database(player['name'], player['team'], player['position'], players_db)
+            gsis_id, strategy = match_player_to_database(player['name'], player['team'], player['position'], short_name_db, players_db)
             player['gsis_id'] = gsis_id if gsis_id else ''
             player['match_strategy'] = strategy
 
