@@ -123,6 +123,11 @@ def load_players_database(db_path='players.csv'):
                 if not gsis_id:
                     continue
 
+                # Only consider active players
+                status = row.get('status', '')
+                if status != 'ACT':
+                    continue
+
                 # Get all name variants
                 display_name = row.get('display_name', '')
                 short_name = row.get('short_name', '')
