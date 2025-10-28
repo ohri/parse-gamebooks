@@ -171,6 +171,9 @@ def load_players_database(db_path='players.csv'):
                         if key not in players_db:
                             players_db[key] = []
                         players_db[key].append(player_data)
+                        # Debug Miller-Hines
+                        if 'miller-hines' in name.lower():
+                            print(f"DEBUG LOAD: Stored name='{name}' as key={key}, position={position}, gsis={gsis_id}")
 
         print(f"Loaded {len(players_db)} player records from database")
         return players_db
@@ -221,8 +224,19 @@ def match_player_to_database(player_name, team_name, position, players_db):
     team_abbr = get_team_abbr(team_name)
     player_name_lower = player_name.lower().strip()
 
+    # Debug specific player
+    if 'miller-hines' in player_name_lower:
+        print(f"DEBUG: Looking for name='{player_name_lower}', team_abbr='{team_abbr}', position='{position}'")
+        print(f"DEBUG: Key would be {(player_name_lower, team_abbr)}")
+
     # Strategy 1: Exact match with team and position
     key = (player_name_lower, team_abbr)
+    if 'miller-hines' in player_name_lower:
+        print(f"DEBUG: Key in db? {key in players_db}")
+        if key in players_db:
+            print(f"DEBUG: Found {len(players_db[key])} entries")
+            for pd in players_db[key]:
+                print(f"DEBUG:   - position={pd.get('position', '')}, gsis={pd.get('gsis_id', '')}")
     if key in players_db:
         player_list = players_db[key]
         # Try to find exact position match first
