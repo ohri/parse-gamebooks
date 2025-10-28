@@ -217,7 +217,7 @@ def get_team_abbr(team_name):
     return team_mapping.get(team_name, '')
 
 def match_player_to_database(player_name, team_name, position, players_db):
-    """Match a player to the database and return their GSIS ID."""
+    """Match a player to the database and return their GSIS ID and match strategy."""
     team_abbr = get_team_abbr(team_name)
     player_name_lower = player_name.lower().strip()
 
@@ -229,7 +229,7 @@ def match_player_to_database(player_name, team_name, position, players_db):
         for player_data in player_list:
             db_position = player_data.get('position', '')
             if db_position == position:
-                return player_data['gsis_id']
+                return player_data['gsis_id'], 'exact_name_team_position'
         # If no position match, keep first candidate
         candidate = player_list[0]['gsis_id'] if player_list else None
     else:
@@ -241,31 +241,31 @@ def match_player_to_database(player_name, team_name, position, players_db):
             for player_data in player_list:
                 db_position = player_data.get('position', '')
                 if db_position == position:
-                    return player_data['gsis_id']
+                    return player_data['gsis_id'], 'exact_name_position'
 
     # Strategy 3: Return the team match even if position doesn't match (from Strategy 1)
     if candidate:
-        return candidate
+        return candidate, 'exact_name_team'
 
     # Strategy 4: Try without team and position check (for players who changed teams)
     for (name, team), player_list in players_db.items():
         if name == player_name_lower and player_list:
-            return player_list[0]['gsis_id']
+            return player_list[0]['gsis_id'], 'exact_name_only'
 
     # Strategy 5: Try with spaces removed (e.g., "N.Collins" vs "N. Collins")
     player_name_no_space = player_name_lower.replace(' ', '')
     for (name, team), player_list in players_db.items():
         if name.replace(' ', '') == player_name_no_space and team == team_abbr and player_list:
-            return player_list[0]['gsis_id']
+            return player_list[0]['gsis_id'], 'name_no_spaces'
 
     # Strategy 6: Try partial match on last name only (as last resort)
     if '.' in player_name:
         last_name = player_name.split('.')[-1].lower().strip()
         for (name, team), player_list in players_db.items():
             if team == team_abbr and name.endswith(last_name) and player_list:
-                return player_list[0]['gsis_id']
+                return player_list[0]['gsis_id'], 'partial_lastname'
 
-    return None
+    return None, None
 
 def extract_game_date(lines):
     """Extract the game date from the PDF."""
@@ -550,126 +550,50 @@ if __name__ == '__main__':
         print(f"ERROR: No files found matching pattern '{pdf_pattern}'")
         exit(1)
 
-    print(f"Found {len(pdf_files)} PDF file(s) to process\n")
-
     # Download and load players database once (outside the loop)
     db_path = 'players.csv'
     download_players_database(db_path)
     players_db = load_players_database(db_path)
+    print()  # Blank line after database loading
 
     # Process each PDF file
     for file_idx, pdf_path in enumerate(pdf_files, 1):
-        print(f"{'='*80}")
-        print(f"Processing file {file_idx}/{len(pdf_files)}: {pdf_path}")
-        print(f"{'='*80}")
-
         # Generate output filename from input filename (change to .sql)
         output_path = os.path.splitext(pdf_path)[0] + '.sql'
 
-        print(f"Extracting player data from {pdf_path}...")
         players, game_score, season, teams = extract_players_from_pdf(pdf_path)
 
         # Use season from command line if provided, otherwise use from PDF
         if args.season:
             season = args.season
-            print(f"Using season from command line: {season}")
-        elif season:
-            print(f"Using season from PDF: {season}")
-        else:
-            print("ERROR: Could not determine season from PDF. Please provide --season parameter.")
-            continue  # Skip this file and move to next
-
-        if game_score:
-            print(f"Game Score: {game_score}")
-
-        print(f"Found {len(players)} players")
+        elif not season:
+            print(f"ERROR: {pdf_path} - Could not determine season. Use --season parameter.")
+            continue
 
         # Match players to database and add GSIS IDs
-        print("\nMatching players to database...")
         matched_count = 0
         unmatched_players = []
-        non_standard_gsis = []
 
         for player in players:
-            gsis_id = match_player_to_database(player['name'], player['team'], player['position'], players_db)
+            gsis_id, strategy = match_player_to_database(player['name'], player['team'], player['position'], players_db)
             player['gsis_id'] = gsis_id if gsis_id else ''
+            player['match_strategy'] = strategy
 
             if gsis_id:
                 matched_count += 1
-                # Check if GSIS ID is in a valid format
-                is_standard = gsis_id.startswith('00-')
-                is_old_format = len(gsis_id) >= 8 and gsis_id[:3].isalpha() and gsis_id[3:].isdigit()
-                if not is_standard and not is_old_format:
-                    non_standard_gsis.append({
-                        'name': player['name'],
-                        'team': player['team'],
-                        'gsis_id': gsis_id,
-                        'position': player['position'],
-                        'status': player['status']
-                    })
             else:
-                unmatched_players.append(f"{player['name']} ({player['team']})")
-
-        print(f"Matched {matched_count}/{len(players)} players ({matched_count*100//len(players)}%)")
-
-        if unmatched_players:
-            print(f"\nUnmatched players ({len(unmatched_players)}):")
-            for name in unmatched_players[:10]:  # Show first 10
-                print(f"  - {name}")
-            if len(unmatched_players) > 10:
-                print(f"  ... and {len(unmatched_players) - 10} more")
-
-        if non_standard_gsis:
-            print(f"\n!!! WARNING: {len(non_standard_gsis)} player(s) with non-standard GSIS ID format (will be commented out):")
-            for p in non_standard_gsis[:15]:  # Show first 15
-                print(f"  - {p['name']:20} ({p['team']:20}) | GSIS: {p['gsis_id']:15} | {p['position']:3} {p['status']}")
-            if len(non_standard_gsis) > 15:
-                print(f"  ... and {len(non_standard_gsis) - 15} more")
-
-        # Count players with valid GSIS IDs (both formats)
-        def is_valid_gsis(gsis_id):
-            if not gsis_id:
-                return False
-            # Standard format: 00-XXXXXXX
-            if gsis_id.startswith('00-'):
-                return True
-            # Old format: 3 letters + digits (e.g., RIV553722)
-            if len(gsis_id) >= 8 and gsis_id[:3].isalpha() and gsis_id[3:].isdigit():
-                return True
-            return False
-
-        players_with_valid_gsis = [p for p in players if is_valid_gsis(p.get('gsis_id', ''))]
-        commented_out_count = len(players) - len(players_with_valid_gsis)
-
-        print(f"\nGenerating SQL statements...")
-        print(f"  Valid entries: {len(players_with_valid_gsis)}")
-        if commented_out_count > 0:
-            print(f"  Commented out (invalid GSIS): {commented_out_count}")
-        print(f"Week: {week}, Season: {season}")
-        print(f"Saving to {output_path}...")
+                unmatched_players.append(f"{player['name']} ({player['team']} {player['position']})")
 
         # Save all players (function will comment out invalid ones)
         save_to_sql(players, output_path, week, season, teams, game_score)
 
-        print("Done!")
+        # Compact single-line output
+        visitor_team = teams.get('visitor', '')
+        home_team = teams.get('home', '')
+        match_pct = (matched_count * 100) // len(players) if len(players) > 0 else 0
+        print(f"{visitor_team} @ {home_team}: {len(players)} players, {match_pct}% matched -> {output_path}")
 
-        # Show stats by team (for all players)
-        team_counts = {}
-        for player in players:
-            team = player['team']
-            team_counts[team] = team_counts.get(team, 0) + 1
-
-        print(f"\nPlayers by team:")
-        for team, count in team_counts.items():
-            print(f"  {team}: {count} players")
-
-        # Show stats by status (for all players)
-        starters = len([p for p in players if p['status'] == 'starter'])
-        backups = len([p for p in players if p['status'] == 'backup'])
-        inactive = len([p for p in players if p['status'] == 'inactive'])
-        dnp = len([p for p in players if p['status'] == 'did_not_play'])
-        print(f"\nStarters: {starters}, Backups: {backups}, Inactive: {inactive}, Did Not Play: {dnp}")
-        print()
-
-    print(f"{'='*80}")
-    print(f"All done! Processed {len(pdf_files)} file(s)")
+        # Show unmatched players if any
+        if unmatched_players:
+            for name in unmatched_players:
+                print(f"  UNMATCHED: {name}")
