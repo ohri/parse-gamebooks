@@ -235,34 +235,33 @@ def match_player_to_database(player_name, team_name, position, players_db):
     else:
         candidate = None
 
-    # Strategy 2: Try to find exact name match with same position (different team)
-    for (name, team), player_list in players_db.items():
-        if name == player_name_lower:
-            for player_data in player_list:
-                db_position = player_data.get('position', '')
-                if db_position == position:
-                    return player_data['gsis_id'], 'exact_name_position'
-
-    # Strategy 3: Return the team match even if position doesn't match (from Strategy 1)
+    # Strategy 2: Return the team match even if position doesn't match (from Strategy 1)
     if candidate:
         return candidate, 'exact_name_team'
 
-    # Strategy 4: Try without team and position check (for players who changed teams)
-    for (name, team), player_list in players_db.items():
-        if name == player_name_lower and player_list:
-            return player_list[0]['gsis_id'], 'exact_name_only'
-
-    # Strategy 5: Try with spaces removed (e.g., "N.Collins" vs "N. Collins")
+    # Strategy 3: Try with spaces removed (e.g., "N.Collins" vs "N. Collins")
     player_name_no_space = player_name_lower.replace(' ', '')
     for (name, team), player_list in players_db.items():
         if name.replace(' ', '') == player_name_no_space and team == team_abbr and player_list:
+            # Check position first
+            for player_data in player_list:
+                db_position = player_data.get('position', '')
+                if db_position == position:
+                    return player_data['gsis_id'], 'name_no_spaces_position'
+            # Return first match if position doesn't match
             return player_list[0]['gsis_id'], 'name_no_spaces'
 
-    # Strategy 6: Try partial match on last name only (as last resort)
+    # Strategy 4: Try partial match on last name only (as last resort, still requires team)
     if '.' in player_name:
         last_name = player_name.split('.')[-1].lower().strip()
         for (name, team), player_list in players_db.items():
             if team == team_abbr and name.endswith(last_name) and player_list:
+                # Check position first
+                for player_data in player_list:
+                    db_position = player_data.get('position', '')
+                    if db_position == position:
+                        return player_data['gsis_id'], 'partial_lastname_position'
+                # Return first match if position doesn't match
                 return player_list[0]['gsis_id'], 'partial_lastname'
 
     return None, None
