@@ -10,8 +10,9 @@ def parse_lineup_line(line, visitor_team, home_team):
     players = []
 
     # Each line has 4 sections: Team1 Offense, Team1 Defense, Team2 Offense, Team2 Defense
-    # Pattern: POS NUM NAME (handles Jo.Phillips, McCaffrey, O'Brien, To'oTo'o, Van Pran-Granger, etc.)
-    pattern = r"([A-Z/]+)\s+(\d+)\s+([A-Z][a-z]*\.[A-Z](?:[a-z]+(?:[A-Z][a-z]+)*|[\'-][A-Za-z]+)(?:[\'-][A-Za-z]+)*(?:\s+[A-Z](?:[a-z]+(?:[A-Z][a-z]+)*|[\'-][A-Za-z]+)(?:[\'-][A-Za-z]+)*)*)"
+    # Pattern: POS NUM NAME (handles Jo.Phillips, B.O'Neill, A.St. Brown, T.Ingram-Dawkins, O'Brien, To'oTo'o, Van Pran-Granger, etc.)
+    # Requires at least one lowercase letter in the final part to avoid matching position codes
+    pattern = r"([A-Z/]+)\s+(\d+)\s+([A-Z][a-z]*\.(?:[A-Z](?:[a-z]+)?\.?\s*)*[-']?[A-Z][a-z]+(?:[-'][A-Z][a-z]+)*)"
 
     matches = re.findall(pattern, line)
 
@@ -46,8 +47,9 @@ def parse_two_column_line(line, visitor_team, home_team):
     left_half = line[:best_split]
     right_half = line[best_split:]
 
-    # Pattern: POS NUM NAME (handles Jo.Phillips, McCaffrey, O'Brien, To'oTo'o, Van Pran-Granger, etc.)
-    pattern = r"([A-Z/]+)\s+(\d+)\s+([A-Z][a-z]*\.[A-Z](?:[a-z]+(?:[A-Z][a-z]+)*|[\'-][A-Za-z]+)(?:[\'-][A-Za-z]+)*(?:\s+[A-Z](?:[a-z]+(?:[A-Z][a-z]+)*|[\'-][A-Za-z]+)(?:[\'-][A-Za-z]+)*)*)"
+    # Pattern: POS NUM NAME (handles Jo.Phillips, B.O'Neill, A.St. Brown, T.Ingram-Dawkins, O'Brien, To'oTo'o, Van Pran-Granger, etc.)
+    # Requires at least one lowercase letter in the final part to avoid matching position codes
+    pattern = r"([A-Z/]+)\s+(\d+)\s+([A-Z][a-z]*\.(?:[A-Z](?:[a-z]+)?\.?\s*)*[-']?[A-Z][a-z]+(?:[-'][A-Z][a-z]+)*)"
 
     # Parse left half (visitor team)
     matches_left = re.findall(pattern, left_half)
@@ -75,8 +77,9 @@ def parse_player_list(text, team_name, status):
     """Parse a comma-separated or space-separated list of players."""
     players = []
 
-    # Pattern: POS NUM NAME (handles Jo.Phillips, McCaffrey, O'Brien, To'oTo'o, Van Pran-Granger, etc.)
-    pattern = r"([A-Z/]+)\s+(\d+)\s+([A-Z][a-z]*\.[A-Z](?:[a-z]+(?:[A-Z][a-z]+)*|[\'-][A-Za-z]+)(?:[\'-][A-Za-z]+)*(?:\s+[A-Z](?:[a-z]+(?:[A-Z][a-z]+)*|[\'-][A-Za-z]+)(?:[\'-][A-Za-z]+)*)*)"
+    # Pattern: POS NUM NAME (handles Jo.Phillips, B.O'Neill, A.St. Brown, T.Ingram-Dawkins, O'Brien, To'oTo'o, Van Pran-Granger, etc.)
+    # Requires at least one lowercase letter in the final part to avoid matching position codes
+    pattern = r"([A-Z/]+)\s+(\d+)\s+([A-Z][a-z]*\.(?:[A-Z](?:[a-z]+)?\.?\s*)*[-']?[A-Z][a-z]+(?:[-'][A-Z][a-z]+)*)"
 
     matches = re.findall(pattern, text)
 
@@ -305,6 +308,28 @@ def match_player_to_database(player_name, team_name, position, short_name_db, pl
 
     return None, None
 
+def rejoin_hyphenated_lines(text):
+    """Rejoin words that are hyphenated across line breaks."""
+    lines = text.split('\n')
+    rejoined_lines = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        # Check if line ends with a hyphen (word split across lines)
+        if i < len(lines) - 1 and line.rstrip().endswith('-'):
+            # Get the next line and extract the first word
+            next_line = lines[i + 1].lstrip()
+            # Find the first word on the next line (up to comma, space, or end)
+            match = re.match(r'^([A-Za-z]+)', next_line)
+            if match:
+                continuation = match.group(1)
+                # Append continuation to current line, remove it from next line
+                line = line.rstrip() + continuation
+                lines[i + 1] = next_line[len(continuation):]
+        rejoined_lines.append(line)
+        i += 1
+    return '\n'.join(rejoined_lines)
+
 def extract_game_date(lines):
     """Extract the game date from the PDF."""
     for line in lines:
@@ -367,6 +392,7 @@ def extract_players_from_pdf(pdf_path):
         page_height = first_page.height
 
         text = first_page.extract_text()
+        text = rejoin_hyphenated_lines(text)
         lines = text.split('\n')
 
         # Extract game date/season
@@ -428,6 +454,10 @@ def extract_players_from_pdf(pdf_path):
                 visitor_text = first_page.within_bbox(bbox_left).extract_text()
                 home_text = first_page.within_bbox(bbox_right).extract_text()
 
+                # Rejoin hyphenated words split across lines
+                visitor_text = rejoin_hyphenated_lines(visitor_text)
+                home_text = rejoin_hyphenated_lines(home_text)
+
                 # Remove the "Substitutions" header
                 visitor_text = visitor_text.replace('Substitutions', '').strip()
                 home_text = home_text.replace('Substitutions', '').strip()
@@ -461,6 +491,10 @@ def extract_players_from_pdf(pdf_path):
 
                 visitor_text = first_page.within_bbox(bbox_left).extract_text()
                 home_text = first_page.within_bbox(bbox_right).extract_text()
+
+                # Rejoin hyphenated words split across lines
+                visitor_text = rejoin_hyphenated_lines(visitor_text)
+                home_text = rejoin_hyphenated_lines(home_text)
 
                 # Remove headers
                 visitor_text = visitor_text.replace('Did Not Play', '').strip()
@@ -498,6 +532,10 @@ def extract_players_from_pdf(pdf_path):
 
                 visitor_text = first_page.within_bbox(bbox_left).extract_text()
                 home_text = first_page.within_bbox(bbox_right).extract_text()
+
+                # Rejoin hyphenated words split across lines
+                visitor_text = rejoin_hyphenated_lines(visitor_text)
+                home_text = rejoin_hyphenated_lines(home_text)
 
                 # Remove headers
                 visitor_text = visitor_text.replace('Not Active', '').strip()
