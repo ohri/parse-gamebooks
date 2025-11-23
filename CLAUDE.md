@@ -37,21 +37,22 @@ python debug_pdf.py
 
 **extract_players.py** - Main parsing engine with several key subsystems:
 
-1. **PDF Parsing Pipeline** (lines 357-512)
+1. **PDF Parsing Pipeline** (lines 380-545)
    - Extracts text from first page using pdfplumber
+   - Applies `rejoin_hyphenated_lines()` to handle names split across line breaks (e.g., "T.Ingram-" + "Dawkins")
    - Identifies sections by text markers: "Lineups", "Substitutions", "Did Not Play", "Not Active"
    - Uses bbox-based extraction to split visitor/home team columns
    - Parses game metadata (date, score, teams)
 
 2. **Player Name Parsing** (lines 8-92)
-   - Complex regex patterns handle edge cases: Jo.Phillips, To'oTo'o, Van Pran-Granger, O'Brien
-   - Pattern: `([A-Z/]+)\s+(\d+)\s+([A-Z][a-z]*\.[A-Z]...)`
+   - Complex regex patterns handle edge cases: B.O'Neill, A.St. Brown, T.Ingram-Dawkins, Jo.Phillips, To'oTo'o, Van Pran-Granger, O'Brien
+   - Pattern: `([A-Z/]+)\s+(\d+)\s+([A-Z][a-z]*\.(?:[A-Z](?:[a-z]+)?\.?\s*)*[-']?[A-Z][a-z]+(?:[-'][A-Z][a-z]+)*)`
    - Three parsing functions for different PDF layouts:
      - `parse_lineup_line()` - 4-column starter lineups
      - `parse_two_column_line()` - 2-column backups/inactive
      - `parse_player_list()` - comma/space-separated lists
 
-3. **Player Matching System** (lines 224-306)
+3. **Player Matching System** (lines 224-308)
    - Multi-strategy fallback approach in `match_player_to_database()`
    - Strategy priority:
      1. short_name + team + position (preferred)
@@ -63,7 +64,13 @@ python debug_pdf.py
    - All strategies require team match (no cross-team matching)
    - Returns tuple: (gsis_id, strategy_name) for debugging
 
-4. **Database Integration** (lines 93-184)
+4. **Hyphenated Line Rejoining** (lines 308-330)
+   - `rejoin_hyphenated_lines()` function handles names split across PDF line breaks
+   - Detects lines ending with hyphen, extracts continuation word from next line
+   - Applied to main text and all bbox extractions (substitutions, inactive players)
+   - Critical for names like "T.Ingram-Dawkins" that wrap mid-name
+
+5. **Database Integration** (lines 93-184)
    - Downloads nflverse players.csv if missing
    - Builds two in-memory lookup dictionaries:
      - `short_name_db` - preferred lookup (short_name format)
@@ -71,7 +78,7 @@ python debug_pdf.py
    - Filters to active players or developmental players (status='ACT' or status='DEV' and ngs_status='DEV')
    - Handles multiple players with same name via lists
 
-5. **SQL Generation** (lines 522-582)
+6. **SQL Generation** (lines 548-608)
    - Outputs Oracle PL/SQL exec statements
    - Format: `exec stats.find_or_create_rawstat_gsis('<gsis_id>', '<team>', '<opponent>', <week>, <season>, '<position>', '<status>')`
    - Status codes: S=Starter, B=Backup/DidNotPlay, I=Inactive
@@ -107,10 +114,12 @@ The `get_team_abbr()` function (lines 186-222) maps full team names to standard 
 ### Important Patterns
 
 1. **PDF Section Detection**: Uses text markers but relies on bbox coordinates for accurate column separation
-2. **Name Complexity**: Parser must handle apostrophes, hyphens, capital letters mid-name, and period-separated initials
-3. **Match Strategy Fallback**: Always requires team match - prevents false matches across teams
-4. **GSIS ID Validation**: Only includes players with valid ID formats in final SQL output
-5. **Opponent Resolution**: Uses `get_opponent()` to find opponent from teams dictionary
+2. **Name Complexity**: Parser must handle compound names (A.St. Brown), apostrophes (B.O'Neill), hyphens (Ingram-Dawkins), capital letters mid-name, and period-separated initials
+3. **Line-Wrapped Names**: PDFs may split hyphenated names across lines; `rejoin_hyphenated_lines()` reassembles them before parsing
+4. **Match Strategy Fallback**: Always requires team match - prevents false matches across teams
+5. **GSIS ID Validation**: Only includes players with valid ID formats in final SQL output
+6. **Opponent Resolution**: Uses `get_opponent()` to find opponent from teams dictionary
+7. **Team Assignment**: Lineup parsing assigns teams by position (indices 0-1 = visitor, 2-3 = home); missing players can cause misalignment
 
 ## Development Notes
 
