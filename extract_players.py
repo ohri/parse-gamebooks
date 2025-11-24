@@ -208,7 +208,7 @@ def get_team_abbr(team_name):
         'Kansas City Chiefs': 'KC',
         'Las Vegas Raiders': 'LV',
         'Los Angeles Chargers': 'LAC',
-        'Los Angeles Rams': 'LAR',
+        'Los Angeles Rams': 'LA',
         'Miami Dolphins': 'MIA',
         'Minnesota Vikings': 'MIN',
         'New England Patriots': 'NE',
