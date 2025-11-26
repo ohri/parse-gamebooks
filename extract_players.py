@@ -602,7 +602,7 @@ def save_to_sql(players, output_path, week, season, teams, game_score=None):
             status_map = {
                 'starter': 'S',
                 'backup': 'B',
-                'inactive': 'I',
+                'inactive': 'NA',
                 'did_not_play': 'B'
             }
             status = status_map.get(status_full, status_full[0].upper() if status_full else '')
