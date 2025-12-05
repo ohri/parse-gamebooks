@@ -127,6 +127,10 @@ def load_players_database(db_path='players.csv'):
                 if not gsis_id:
                     continue
 
+                # Skip GSIS IDs that start with alphabetic characters (old format like ABB498348)
+                if gsis_id[0].isalpha():
+                    continue
+
                 # Only consider active players or developmental players (where both status and ngs_status are DEV)
                 status = row.get('status', '')
                 ngs_status = row.get('ngs_status', '')
