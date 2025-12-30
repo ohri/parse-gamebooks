@@ -93,10 +93,15 @@ def parse_player_list(text, team_name, status):
 
     return players
 
-def download_players_database(output_path='players.csv'):
-    """Download the nflverse players database if it doesn't exist."""
-    if os.path.exists(output_path):
-        print(f"Players database already exists at {output_path}")
+def download_players_database(output_path='players.csv', force_download=True):
+    """Download the nflverse players database.
+
+    Args:
+        output_path: Path to save the database file
+        force_download: If True, always download. If False, skip if file exists.
+    """
+    if not force_download and os.path.exists(output_path):
+        print(f"Using existing players database at {output_path}")
         return output_path
 
     url = 'https://github.com/nflverse/nflverse-data/releases/download/players/players.csv'
@@ -644,6 +649,7 @@ if __name__ == '__main__':
     parser.add_argument('pdf_file', nargs='?', default='housea.pdf', help='PDF file to process')
     parser.add_argument('--week', '-w', type=int, required=True, help='Week number')
     parser.add_argument('--season', '-s', type=int, help='Season year (defaults to year from PDF)')
+    parser.add_argument('--no-fetch', action='store_true', help='Do not download players.csv, use existing file')
     args = parser.parse_args()
 
     pdf_pattern = args.pdf_file
@@ -658,7 +664,7 @@ if __name__ == '__main__':
 
     # Download and load players database once (outside the loop)
     db_path = 'players.csv'
-    download_players_database(db_path)
+    download_players_database(db_path, force_download=not args.no_fetch)
     short_name_db, players_db = load_players_database(db_path)
     print()  # Blank line after database loading
 
