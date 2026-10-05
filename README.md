@@ -19,7 +19,7 @@ pip install -r requirements.txt
 ## Usage
 
 ```bash
-python extract_players.py <pdf_file> --week <week_number> [--season <season_year>]
+python extract_players.py <pdf_file_or_pattern> [<additional_file_or_pattern> ...] --week <week_number> [--season <season_year>]
 ```
 
 ### Examples
@@ -28,9 +28,17 @@ python extract_players.py <pdf_file> --week <week_number> [--season <season_year
 # Process a gamebook for week 7 (season auto-detected from PDF)
 python extract_players.py housea.pdf --week 7
 
+# Process all PDFs matching a wildcard (quote it to let the parser expand it)
+python extract_players.py "*.pdf" --week 7
+
+# Process multiple files or patterns
+python extract_players.py game1.pdf game2.pdf "playoffs/*.pdf" --week 7
+
 # Process a gamebook for week 7 of 2024 season
 python extract_players.py housea.pdf --week 7 --season 2024
 ```
+
+Interactive output is color-coded when supported: green for clean results, yellow for fallback matches, and red for unmatched players or errors. Use `--no-color` or set `NO_COLOR` to disable colors.
 
 ## Output
 

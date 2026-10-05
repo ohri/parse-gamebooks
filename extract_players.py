@@ -4,6 +4,7 @@ import re
 import os
 import urllib.request
 import glob
+import sys
 
 # Player names in gamebooks use abbreviated first names (for example,
 # ``T.Smith`` or ``Tr.Smith``) and can have multi-part surnames (for example,
@@ -14,6 +15,19 @@ PLAYER_PATTERN = re.compile(
     r"([A-Z][a-z]*\.(?:[A-Z](?:[a-z]+)?\.?\s*)*"
     r"[-']?[A-Z][a-z]+(?:\s+[A-Z][a-z]+|[-'][A-Z][a-z]+)*)"
 )
+
+ANSI_COLORS = {
+    'green': '\033[32m',
+    'yellow': '\033[33m',
+    'red': '\033[31m',
+    'reset': '\033[0m',
+}
+
+def colorize(text, color, enabled):
+    """Add terminal color when enabled, otherwise return plain text."""
+    if not enabled or color not in ANSI_COLORS:
+        return text
+    return f"{ANSI_COLORS[color]}{text}{ANSI_COLORS['reset']}"
 
 def parse_lineup_line(line, visitor_team, home_team):
     """Parse a single lineup line into players for both teams."""
@@ -364,6 +378,16 @@ def rejoin_hyphenated_lines(text):
         i += 1
     return '\n'.join(rejoined_lines)
 
+def is_lower_confidence_match(strategy):
+    """Return whether a match used a heuristic worth mentioning to the user."""
+    # An exact short name plus team is still a strong identity match even when
+    # the gamebook and database use different position labels (for example,
+    # OLB vs. DL).  Only surface transformations that can plausibly identify
+    # the wrong player: abbreviated initials and partial surnames.
+    return bool(strategy) and any(
+        marker in strategy for marker in ('abbreviated_initial', 'partial_lastname')
+    )
+
 def extract_game_date(lines):
     """Extract the game date from the PDF."""
     for line in lines:
@@ -671,20 +695,28 @@ if __name__ == '__main__':
 
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Extract player data from NFL gamebook PDF and generate SQL statements')
-    parser.add_argument('pdf_file', nargs='?', default='housea.pdf', help='PDF file to process')
+    parser.add_argument('pdf_files', nargs='*', default=['housea.pdf'], help='PDF file(s) or wildcard pattern(s) to process')
     parser.add_argument('--week', '-w', type=int, required=True, help='Week number')
     parser.add_argument('--season', '-s', type=int, help='Season year (defaults to year from PDF)')
     parser.add_argument('--no-fetch', action='store_true', help='Do not download players.csv, use existing file')
+    parser.add_argument('--no-color', action='store_true', help='Disable colored terminal output')
     args = parser.parse_args()
 
-    pdf_pattern = args.pdf_file
+    use_color = sys.stdout.isatty() and not args.no_color and 'NO_COLOR' not in os.environ
+
     week = args.week
 
-    # Expand glob pattern to get list of PDF files
-    pdf_files = glob.glob(pdf_pattern)
+    # Expand glob patterns. This handles both quoted patterns (expanded here)
+    # and unquoted patterns (already expanded by the shell into multiple args).
+    pdf_files = []
+    for pdf_pattern in args.pdf_files:
+        pdf_files.extend(glob.glob(pdf_pattern))
+
+    # Remove duplicates while preserving the user's argument/order.
+    pdf_files = list(dict.fromkeys(pdf_files))
 
     if not pdf_files:
-        print(f"ERROR: No files found matching pattern '{pdf_pattern}'")
+        print(colorize(f"ERROR: No files found matching: {', '.join(args.pdf_files)}", 'red', use_color))
         exit(1)
 
     # Download and load players database once (outside the loop)
@@ -704,12 +736,13 @@ if __name__ == '__main__':
         if args.season:
             season = args.season
         elif not season:
-            print(f"ERROR: {pdf_path} - Could not determine season. Use --season parameter.")
+            print(colorize(f"ERROR: {pdf_path} - Could not determine season. Use --season parameter.", 'red', use_color))
             continue
 
         # Match players to database and add GSIS IDs
         matched_count = 0
         unmatched_players = []
+        lower_confidence_matches = []
 
         for player in players:
             gsis_id, strategy = match_player_to_database(player['name'], player['team'], player['position'], short_name_db, players_db)
@@ -718,6 +751,11 @@ if __name__ == '__main__':
 
             if gsis_id:
                 matched_count += 1
+                if is_lower_confidence_match(strategy):
+                    lower_confidence_matches.append(
+                        f"{player['name']} ({player['team']} {player['position']}) "
+                        f"-> {gsis_id} [{strategy}]"
+                    )
             else:
                 unmatched_players.append(f"{player['name']} ({player['team']} {player['position']})")
 
@@ -728,9 +766,17 @@ if __name__ == '__main__':
         visitor_team = teams.get('visitor', '')
         home_team = teams.get('home', '')
         match_pct = (matched_count * 100) // len(players) if len(players) > 0 else 0
-        print(f"{visitor_team} @ {home_team}: {len(players)} players, {match_pct}% matched -> {output_path}")
+        summary = f"{visitor_team} @ {home_team}: {len(players)} players, {match_pct}% matched -> {output_path}"
+        summary_color = 'red' if unmatched_players else 'yellow' if lower_confidence_matches else 'green'
+        print(colorize(summary, summary_color, use_color))
 
         # Show unmatched players if any
         if unmatched_players:
             for name in unmatched_players:
-                print(f"  UNMATCHED: {name}")
+                print(colorize(f"  UNMATCHED: {name}", 'red', use_color))
+
+        # Show fallback matches without interrupting best-effort processing.
+        if lower_confidence_matches:
+            print(colorize(f"  CHECK: {len(lower_confidence_matches)} lower-confidence match(es)", 'yellow', use_color))
+            for match in lower_confidence_matches:
+                print(colorize(f"    {match}", 'yellow', use_color))

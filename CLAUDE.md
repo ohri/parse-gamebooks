@@ -16,13 +16,16 @@ pip install -r requirements.txt
 ### Running the Parser
 ```bash
 # Basic usage with week number (season auto-detected from PDF)
-python extract_players.py <pdf_file> --week <week_number>
+python extract_players.py <pdf_file_or_pattern> [<additional_file_or_pattern> ...] --week <week_number>
 
 # Specify season explicitly
 python extract_players.py housea.pdf --week 7 --season 2024
 
 # Process multiple PDFs using glob patterns
 python extract_players.py "*.pdf" --week 7
+
+# Multiple explicit files and patterns are also accepted
+python extract_players.py game1.pdf game2.pdf "playoffs/*.pdf" --week 7
 ```
 
 ### Testing/Debugging
@@ -128,3 +131,5 @@ The `get_team_abbr()` function (lines 186-222) maps full team names to standard 
 - bbox coordinates are used for accurate column splitting in substitutions/inactive sections
 - Recent commits show evolution of matching strategies (preferring short_name, removing cross-team matching)
 - Output is intentionally compact: one line per file with match percentage and unmatched player list
+- Exact name/team matches are quiet, even when position labels differ; heuristic matches involving abbreviated initials or partial surnames are reported as `CHECK` lines while still being used
+- Interactive CLI summaries use green for clean results, yellow for fallback matches, and red for unmatched players/errors; colors are disabled for redirected output and via `--no-color` or `NO_COLOR`
