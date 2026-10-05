@@ -46,7 +46,7 @@ python debug_pdf.py
 
 2. **Player Name Parsing** (lines 8-92)
    - Complex regex patterns handle edge cases: B.O'Neill, A.St. Brown, T.Ingram-Dawkins, Jo.Phillips, To'oTo'o, Van Pran-Granger, O'Brien
-   - Pattern: `([A-Z/]+)\s+(\d+)\s+([A-Z][a-z]*\.(?:[A-Z](?:[a-z]+)?\.?\s*)*[-']?[A-Z][a-z]+(?:[-'][A-Z][a-z]+)*)`
+   - Shared pattern supports compound, hyphenated, and multi-part surnames such as `A.St. Brown`, `T.Ingram-Dawkins`, and `G.Van Roten`
    - Three parsing functions for different PDF layouts:
      - `parse_lineup_line()` - 4-column starter lineups
      - `parse_two_column_line()` - 2-column backups/inactive
@@ -60,7 +60,8 @@ python debug_pdf.py
      3. other name variants + team + position
      4. other name variants + team
      5. name with spaces removed
-     6. partial last name match (requires team)
+   6. partial last name match (requires team)
+   - Multi-letter first-name abbreviations are normalized as a fallback (`Tr.Smith` -> `T.Smith`) while preserving team and position checks
    - All strategies require team match (no cross-team matching)
    - Returns tuple: (gsis_id, strategy_name) for debugging
 

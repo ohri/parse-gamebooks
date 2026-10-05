@@ -5,6 +5,16 @@ import os
 import urllib.request
 import glob
 
+# Player names in gamebooks use abbreviated first names (for example,
+# ``T.Smith`` or ``Tr.Smith``) and can have multi-part surnames (for example,
+# ``G.Van Roten``).  Keep this pattern shared by all three section parsers so
+# they extract the same name regardless of where it appears in the gamebook.
+PLAYER_PATTERN = re.compile(
+    r"([A-Z/]+)\s+(\d+)\s+"
+    r"([A-Z][a-z]*\.(?:[A-Z](?:[a-z]+)?\.?\s*)*"
+    r"[-']?[A-Z][a-z]+(?:\s+[A-Z][a-z]+|[-'][A-Z][a-z]+)*)"
+)
+
 def parse_lineup_line(line, visitor_team, home_team):
     """Parse a single lineup line into players for both teams."""
     players = []
@@ -12,9 +22,7 @@ def parse_lineup_line(line, visitor_team, home_team):
     # Each line has 4 sections: Team1 Offense, Team1 Defense, Team2 Offense, Team2 Defense
     # Pattern: POS NUM NAME (handles Jo.Phillips, B.O'Neill, A.St. Brown, T.Ingram-Dawkins, O'Brien, To'oTo'o, Van Pran-Granger, etc.)
     # Requires at least one lowercase letter in the final part to avoid matching position codes
-    pattern = r"([A-Z/]+)\s+(\d+)\s+([A-Z][a-z]*\.(?:[A-Z](?:[a-z]+)?\.?\s*)*[-']?[A-Z][a-z]+(?:[-'][A-Z][a-z]+)*)"
-
-    matches = re.findall(pattern, line)
+    matches = PLAYER_PATTERN.findall(line)
 
     # There should be 4 matches per line (one for each column)
     # Columns 0 and 1 are visitor team, columns 2 and 3 are home team
@@ -49,10 +57,8 @@ def parse_two_column_line(line, visitor_team, home_team):
 
     # Pattern: POS NUM NAME (handles Jo.Phillips, B.O'Neill, A.St. Brown, T.Ingram-Dawkins, O'Brien, To'oTo'o, Van Pran-Granger, etc.)
     # Requires at least one lowercase letter in the final part to avoid matching position codes
-    pattern = r"([A-Z/]+)\s+(\d+)\s+([A-Z][a-z]*\.(?:[A-Z](?:[a-z]+)?\.?\s*)*[-']?[A-Z][a-z]+(?:[-'][A-Z][a-z]+)*)"
-
     # Parse left half (visitor team)
-    matches_left = re.findall(pattern, left_half)
+    matches_left = PLAYER_PATTERN.findall(left_half)
     for position, number, name in matches_left:
         players.append({
             'team': visitor_team,
@@ -62,7 +68,7 @@ def parse_two_column_line(line, visitor_team, home_team):
         })
 
     # Parse right half (home team)
-    matches_right = re.findall(pattern, right_half)
+    matches_right = PLAYER_PATTERN.findall(right_half)
     for position, number, name in matches_right:
         players.append({
             'team': home_team,
@@ -79,9 +85,7 @@ def parse_player_list(text, team_name, status):
 
     # Pattern: POS NUM NAME (handles Jo.Phillips, B.O'Neill, A.St. Brown, T.Ingram-Dawkins, O'Brien, To'oTo'o, Van Pran-Granger, etc.)
     # Requires at least one lowercase letter in the final part to avoid matching position codes
-    pattern = r"([A-Z/]+)\s+(\d+)\s+([A-Z][a-z]*\.(?:[A-Z](?:[a-z]+)?\.?\s*)*[-']?[A-Z][a-z]+(?:[-'][A-Z][a-z]+)*)"
-
-    matches = re.findall(pattern, text)
+    matches = PLAYER_PATTERN.findall(text)
 
     for position, number, name in matches:
         players.append({
@@ -267,6 +271,27 @@ def match_player_to_database(player_name, team_name, position, short_name_db, pl
     # Strategy 3: Return the team match even if position doesn't match (from Strategy 2)
     if candidate:
         return candidate, 'other_name_team'
+
+    # Some gamebooks use more than one letter for the first-name abbreviation
+    # (for example ``Tr.Smith`` for Trey Smith), while nflverse stores the
+    # conventional one-letter form (``T.Smith``).  Only abbreviate the prefix
+    # before the first period; the team constraint remains mandatory.
+    abbreviated_name = re.sub(r'^([a-z])[a-z]+\.', r'\1.', player_name_lower)
+    if abbreviated_name != player_name_lower:
+        abbreviated_key = (abbreviated_name, team_abbr)
+        player_list = short_name_db.get(abbreviated_key, [])
+        for player_data in player_list:
+            if player_data.get('position', '') == position:
+                return player_data['gsis_id'], 'short_name_abbreviated_initial_team_position'
+        if player_list:
+            return player_list[0]['gsis_id'], 'short_name_abbreviated_initial_team'
+
+        player_list = players_db.get(abbreviated_key, [])
+        for player_data in player_list:
+            if player_data.get('position', '') == position:
+                return player_data['gsis_id'], 'other_name_abbreviated_initial_team_position'
+        if player_list:
+            return player_list[0]['gsis_id'], 'other_name_abbreviated_initial_team'
 
     # Strategy 4: Try with spaces removed in short_name (e.g., "N.Collins" vs "N. Collins")
     player_name_no_space = player_name_lower.replace(' ', '')
