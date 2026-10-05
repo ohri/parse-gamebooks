@@ -133,3 +133,12 @@ The `get_team_abbr()` function (lines 186-222) maps full team names to standard 
 - Output is intentionally compact: one line per file with match percentage and unmatched player list
 - Exact name/team matches are quiet, even when position labels differ; heuristic matches involving abbreviated initials or partial surnames are reported as `CHECK` lines while still being used
 - Interactive CLI summaries use green for clean results, yellow for fallback matches, and red for unmatched players/errors; colors are disabled for redirected output and via `--no-color` or `NO_COLOR`
+
+## Next-session guidance
+
+- The CLI accepts multiple PDF paths and wildcard patterns. Quote wildcard patterns when passing them to the script so the parser can expand them itself, for example `python3 extract_players.py "*.pdf" --week 4`.
+- Use `--no-fetch` when an existing `players.csv` should be reused; otherwise the parser refreshes the nflverse player database.
+- If Python reports `CERTIFICATE_VERIFY_FAILED` while downloading `players.csv`, use the installed certifi bundle for the session: `SSL_CERT_FILE="$(python3 -c 'import certifi; print(certifi.where())')"`.
+- Treat `CHECK` lines as review prompts, not failures. Exact name/team matches remain quiet even when position labels differ; abbreviated-initial and partial-last-name matches are the ones surfaced.
+- Before changing matching behavior, test both extraction and matching with representative names such as `Tr.Smith`, `G.Van Roten`, compound surnames, hyphenated names, and apostrophes.
+- The GitHub remote is `https://github.com/ohri/parse-gamebooks`. If a push says `fetch first`, fetch/rebase `origin/master` before pushing; do not overwrite remote history.
