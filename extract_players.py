@@ -173,6 +173,7 @@ def load_players_database(db_path='players.csv'):
                     'gsis_id': gsis_id,
                     'display_name': display_name,
                     'short_name': short_name,
+                    'first_name': first_name,
                     'latest_team': team,
                     'position': position
                 }
@@ -290,10 +291,24 @@ def match_player_to_database(player_name, team_name, position, short_name_db, pl
     # (for example ``Tr.Smith`` for Trey Smith), while nflverse stores the
     # conventional one-letter form (``T.Smith``).  Only abbreviate the prefix
     # before the first period; the team constraint remains mandatory.
+    abbreviated_prefix_match = re.match(r'^([a-z]+)\.', player_name_lower)
     abbreviated_name = re.sub(r'^([a-z])[a-z]+\.', r'\1.', player_name_lower)
     if abbreviated_name != player_name_lower:
         abbreviated_key = (abbreviated_name, team_abbr)
         player_list = short_name_db.get(abbreviated_key, [])
+
+        # The one-initial form can be ambiguous when two teammates share a
+        # surname (for example, Bi.Robinson and Br.Robinson in Atlanta).  Use
+        # the extra letters from the gamebook abbreviation to disambiguate
+        # before falling back to the legacy one-initial behavior.
+        if abbreviated_prefix_match:
+            prefix = abbreviated_prefix_match.group(1)
+            prefixed_players = [
+                player_data for player_data in player_list
+                if player_data.get('first_name', '').lower().startswith(prefix)
+            ]
+            if prefixed_players:
+                player_list = prefixed_players
         for player_data in player_list:
             if player_data.get('position', '') == position:
                 return player_data['gsis_id'], 'short_name_abbreviated_initial_team_position'
@@ -301,6 +316,14 @@ def match_player_to_database(player_name, team_name, position, short_name_db, pl
             return player_list[0]['gsis_id'], 'short_name_abbreviated_initial_team'
 
         player_list = players_db.get(abbreviated_key, [])
+        if abbreviated_prefix_match:
+            prefix = abbreviated_prefix_match.group(1)
+            prefixed_players = [
+                player_data for player_data in player_list
+                if player_data.get('first_name', '').lower().startswith(prefix)
+            ]
+            if prefixed_players:
+                player_list = prefixed_players
         for player_data in player_list:
             if player_data.get('position', '') == position:
                 return player_data['gsis_id'], 'other_name_abbreviated_initial_team_position'
