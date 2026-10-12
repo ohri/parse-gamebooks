@@ -48,6 +48,9 @@ The script generates a `.sql` file with the same base name as the input PDF cont
   ```sql
   exec stats.find_or_create_rawstat_gsis('<gsis_id>', '<team>', '<opponent>', <week>, <season>, '<position>', '<status>');
   ```
+- When the PDF includes a `Playtime Percentage` table, it also generates a companion
+  `<base>_snaps.sql` file with `scoring.add_player_snaps(...)` statements.
+- PDFs without snap rows do not generate a snap output file.
 
 ### Status Codes
 - `S` - Starter

@@ -29,6 +29,10 @@ def colorize(text, color, enabled):
         return text
     return f"{ANSI_COLORS[color]}{text}{ANSI_COLORS['reset']}"
 
+def normalize_player_name(name):
+    """Normalize whitespace in names that wrap across extracted PDF lines."""
+    return re.sub(r'\s+', ' ', name).strip()
+
 def parse_lineup_line(line, visitor_team, home_team):
     """Parse a single lineup line into players for both teams."""
     players = []
@@ -44,7 +48,7 @@ def parse_lineup_line(line, visitor_team, home_team):
         team = visitor_team if idx < 2 else home_team
         players.append({
             'team': team,
-            'name': name,
+            'name': normalize_player_name(name),
             'position': position,
             'status': 'starter'
         })
@@ -76,7 +80,7 @@ def parse_two_column_line(line, visitor_team, home_team):
     for position, number, name in matches_left:
         players.append({
             'team': visitor_team,
-            'name': name,
+            'name': normalize_player_name(name),
             'position': position,
             'status': 'backup'
         })
@@ -86,7 +90,7 @@ def parse_two_column_line(line, visitor_team, home_team):
     for position, number, name in matches_right:
         players.append({
             'team': home_team,
-            'name': name,
+            'name': normalize_player_name(name),
             'position': position,
             'status': 'backup'
         })
@@ -104,7 +108,7 @@ def parse_player_list(text, team_name, status):
     for position, number, name in matches:
         players.append({
             'team': team_name,
-            'name': name,
+            'name': normalize_player_name(name),
             'position': position,
             'status': status
         })
@@ -460,9 +464,164 @@ def extract_game_score(lines):
 
     return visitor_team, visitor_score, home_team, home_score
 
+
+def _group_words_by_line(words, tolerance=2):
+    """Group pdfplumber words into visually aligned text lines."""
+    lines = []
+    for word in sorted(words, key=lambda item: (item['top'], item['x0'])):
+        for line in lines:
+            if abs(line[0]['top'] - word['top']) <= tolerance:
+                line.append(word)
+                break
+        else:
+            lines.append([word])
+    return [sorted(line, key=lambda item: item['x0']) for line in lines]
+
+
+def _find_team_headers(words, teams):
+    """Find team names and their positions in a PDF page."""
+    headers = []
+    for team in teams.values():
+        if not team:
+            continue
+        team_words = team.split()
+        lower_words = [word['text'].lower() for word in words]
+        for index in range(len(words) - len(team_words) + 1):
+            if lower_words[index:index + len(team_words)] == [part.lower() for part in team_words]:
+                headers.append({
+                    'team': team,
+                    'x': (words[index]['x0'] + words[index + len(team_words) - 1]['x1']) / 2,
+                    'top': words[index]['top'],
+                })
+                break
+    return headers
+
+
+def _snap_values_by_unit(words, unit_headings):
+    """Assign metric values to the nearest unit column in a table row."""
+    values = {unit: {'snaps': '0', 'pct': '0'} for unit in unit_headings}
+    numeric_words = []
+    for word in words:
+        value = word['text'].replace('%', '')
+        if re.fullmatch(r'\d+(?:\.\d+)?', value):
+            numeric_words.append((word, value))
+
+    for word, value in numeric_words:
+        unit = min(
+            unit_headings,
+            key=lambda candidate: abs(word['x0'] - unit_headings[candidate]),
+        )
+        metric = 'pct' if word['text'].endswith('%') else 'snaps'
+        values[unit][metric] = value
+
+    return values
+
+
+def _is_snap_name_token(text):
+    """Return whether a table token can begin a gamebook player name."""
+    return bool(re.fullmatch(r"[A-Z][A-Za-z'’-]*\.[A-Za-z'’-]+", text))
+
+
+def _parse_snap_row(row_words, unit_headings):
+    """Parse one player row from a playtime-percentage table."""
+    player_index = None
+    position_index = None
+    for index, word in enumerate(row_words):
+        if not _is_snap_name_token(word['text']):
+            continue
+        # A surname can be split into multiple PDF words, e.g. R.Van Demark
+        # or K.Van Noy. Find the position token after the complete name.
+        for candidate_index in range(index + 1, len(row_words)):
+            if re.fullmatch(r'[A-Z][A-Z/]{0,5}', row_words[candidate_index]['text']):
+                player_index = index
+                position_index = candidate_index
+                break
+        if player_index is not None:
+            break
+    if player_index is None:
+        return None
+
+    player_name = normalize_player_name(
+        ' '.join(word['text'] for word in row_words[player_index:position_index])
+    )
+
+    # Stop before the next team's/player's name when both table halves share a
+    # visual line. This keeps absent units at zero instead of copying a value
+    # from another unit or the other team's row.
+    metric_end = len(row_words)
+    for index in range(position_index + 1, len(row_words)):
+        if _is_snap_name_token(row_words[index]['text']):
+            metric_end = index
+            break
+    values = _snap_values_by_unit(row_words[position_index + 1:metric_end], unit_headings)
+
+    return {
+        'name': player_name,
+        'position': row_words[position_index]['text'],
+        'offense_snaps': values['offense']['snaps'],
+        'offense_pct': values['offense']['pct'],
+        'defense_snaps': values['defense']['snaps'],
+        'defense_pct': values['defense']['pct'],
+        'st_snaps': values['special_teams']['snaps'],
+        'st_pct': values['special_teams']['pct'],
+    }
+
+
+def extract_snaps_from_pdf(pdf, teams):
+    """Extract playtime-percentage snap rows from all pages of a gamebook."""
+    snaps = []
+    for page in pdf.pages:
+        words = page.extract_words()
+        playtime_words = [word for word in words if word['text'].lower() == 'playtime']
+        if not playtime_words:
+            continue
+
+        playtime_top = min(word['top'] for word in playtime_words)
+        page_words = [word for word in words if word['top'] >= playtime_top]
+        lines = _group_words_by_line(page_words)
+
+        # Unit headings are positioned above the values they describe. Keeping
+        # their x-coordinates lets this work for both one-column and two-column
+        # gamebook layouts, including blank metric cells.
+        unit_words = {
+            'offense': [word for word in page_words if word['text'].lower() == 'offense'],
+            'defense': [word for word in page_words if word['text'].lower() == 'defense'],
+            'special_teams': [word for word in page_words if word['text'].lower() == 'special'],
+        }
+        headers = _find_team_headers(page_words, teams)
+        if not headers or not all(unit_words.values()):
+            continue
+
+        for line in lines:
+            if not any(word['text'].endswith('%') for word in line):
+                continue
+            for player_index, word in enumerate(line[:-1]):
+                if not _is_snap_name_token(word['text']):
+                    continue
+
+                player_x = word['x0']
+                team_headers = [header for header in headers if header['top'] <= word['top']]
+                if not team_headers:
+                    continue
+                team_header = min(team_headers, key=lambda header: abs(header['x'] - player_x))
+
+                # Select the nearest heading of each type to this player's
+                # column, avoiding the other team's duplicate headings.
+                unit_headings = {}
+                for unit, candidates in unit_words.items():
+                    unit_headings[unit] = min(candidates, key=lambda candidate: abs(candidate['x0'] - player_x))['x0']
+
+                row = _parse_snap_row(line[player_index:], unit_headings)
+                if row:
+                    row['team'] = team_header['team']
+                    snaps.append(row)
+
+    return snaps
+
 def extract_players_from_pdf(pdf_path):
     """Main function to extract all player data from the PDF."""
     all_players = []
+    snap_rows = []
     game_score = None
     season = None
     teams = {}
@@ -628,7 +787,9 @@ def extract_players_from_pdf(pdf_path):
                 all_players.extend(visitor_players)
                 all_players.extend(home_players)
 
-    return all_players, game_score, season, teams
+        snap_rows = extract_snaps_from_pdf(pdf, teams)
+
+    return all_players, game_score, season, teams, snap_rows
 
 def get_opponent(team, teams):
     """Get the opponent for a given team."""
@@ -699,6 +860,28 @@ def save_to_sql(players, output_path, week, season, teams, game_score=None):
                 # Invalid or missing GSIS ID - comment it out
                 sqlfile.write(f"-- INVALID GSIS: {name} ({team}) - {sql}\n")
 
+
+def save_snaps_to_sql(snaps, output_path, week, season, short_name_db, players_db):
+    """Save gamebook playtime-percentage rows as scoring SQL statements."""
+    with open(output_path, 'w', encoding='utf-8') as sqlfile:
+        sqlfile.write(f"-- Week {week}, Season {season}\n\n")
+        for snap in snaps:
+            gsis_id, strategy = match_player_to_database(
+                snap['name'], snap['team'], snap['position'], short_name_db, players_db
+            )
+            sql = (
+                f"exec scoring.add_player_snaps('{gsis_id or ''}', {season}, {week}, "
+                f"{snap['offense_snaps']}, {float(snap['offense_pct']) / 100:g}, "
+                f"{snap['defense_snaps']}, {float(snap['defense_pct']) / 100:g}, "
+                f"{snap['st_snaps']}, {float(snap['st_pct']) / 100:g});"
+            )
+            if gsis_id and gsis_id.startswith('00-'):
+                sqlfile.write(sql + '\n')
+            else:
+                sqlfile.write(
+                    f"-- INVALID GSIS: {snap['name']} ({snap['team']}) - {sql}\n"
+                )
+
 def save_to_csv(players, output_path, game_score=None):
     """Save player data to CSV file."""
     with open(output_path, 'w', newline='', encoding='utf-8') as csvfile:
@@ -753,7 +936,7 @@ if __name__ == '__main__':
         # Generate output filename from input filename (change to .sql)
         output_path = os.path.splitext(pdf_path)[0] + '.sql'
 
-        players, game_score, season, teams = extract_players_from_pdf(pdf_path)
+        players, game_score, season, teams, snap_rows = extract_players_from_pdf(pdf_path)
 
         # Use season from command line if provided, otherwise use from PDF
         if args.season:
@@ -784,6 +967,18 @@ if __name__ == '__main__':
 
         # Save all players (function will comment out invalid ones)
         save_to_sql(players, output_path, week, season, teams, game_score)
+
+        if snap_rows:
+            snaps_output_path = os.path.splitext(pdf_path)[0] + '_snaps.sql'
+            save_snaps_to_sql(
+                snap_rows,
+                snaps_output_path,
+                week,
+                season,
+                short_name_db,
+                players_db,
+            )
+            print(f"  Wrote {len(snap_rows)} snap rows -> {snaps_output_path}")
 
         # Compact single-line output
         visitor_team = teams.get('visitor', '')
