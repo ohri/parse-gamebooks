@@ -498,7 +498,13 @@ def _find_team_headers(words, teams):
 
 
 def _snap_values_by_unit(words, unit_headings):
-    """Assign metric values to the nearest unit column in a table row."""
+    """Assign metric values to the nearest unit column in a table row.
+
+    ``unit_headings`` contains the center of each two-column unit group.  A
+    gamebook can omit blank cells from the extracted text, so values must be
+    classified by their PDF coordinates rather than by their order in the
+    extracted words.
+    """
     values = {unit: {'snaps': '0', 'pct': '0'} for unit in unit_headings}
     numeric_words = []
     for word in words:
@@ -515,6 +521,32 @@ def _snap_values_by_unit(words, unit_headings):
         values[unit][metric] = value
 
     return values
+
+
+def _unit_heading_centers(page_words, unit):
+    """Return centers for a unit heading, including the full ST label.
+
+    In the gamebook PDF, ``Special Teams`` is emitted as two words.  Using
+    only the x-coordinate of ``Special`` biases the nearest-column lookup
+    toward the preceding defense columns, especially for snap-count cells.
+    """
+    centers = []
+    words = [word for word in page_words if word['text'].lower() == unit]
+    for word in words:
+        if unit != 'special':
+            centers.append((word['x0'] + word['x1']) / 2)
+            continue
+
+        teams = [candidate for candidate in page_words
+                 if candidate['text'].lower() == 'teams'
+                 and abs(candidate['top'] - word['top']) <= 2
+                 and candidate['x0'] >= word['x1']]
+        if teams:
+            teams_word = min(teams, key=lambda candidate: candidate['x0'])
+            centers.append((word['x0'] + teams_word['x1']) / 2)
+        else:
+            centers.append((word['x0'] + word['x1']) / 2)
+    return centers
 
 
 def _is_snap_name_token(text):
@@ -584,9 +616,9 @@ def extract_snaps_from_pdf(pdf, teams):
         # their x-coordinates lets this work for both one-column and two-column
         # gamebook layouts, including blank metric cells.
         unit_words = {
-            'offense': [word for word in page_words if word['text'].lower() == 'offense'],
-            'defense': [word for word in page_words if word['text'].lower() == 'defense'],
-            'special_teams': [word for word in page_words if word['text'].lower() == 'special'],
+            'offense': _unit_heading_centers(page_words, 'offense'),
+            'defense': _unit_heading_centers(page_words, 'defense'),
+            'special_teams': _unit_heading_centers(page_words, 'special'),
         }
         headers = _find_team_headers(page_words, teams)
         if not headers or not all(unit_words.values()):
@@ -609,7 +641,11 @@ def extract_snaps_from_pdf(pdf, teams):
                 # column, avoiding the other team's duplicate headings.
                 unit_headings = {}
                 for unit, candidates in unit_words.items():
-                    unit_headings[unit] = min(candidates, key=lambda candidate: abs(candidate['x0'] - player_x))['x0']
+                    team_center = team_header['x']
+                    unit_headings[unit] = min(
+                        candidates,
+                        key=lambda candidate: abs(candidate - team_center),
+                    )
 
                 row = _parse_snap_row(line[player_index:], unit_headings)
                 if row:
