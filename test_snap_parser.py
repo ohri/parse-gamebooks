@@ -1,7 +1,7 @@
 import unittest
 from pathlib import Path
 
-from extract_players import extract_players_from_pdf
+from extract_players import extract_players_from_pdf, load_players_database, match_player_to_database
 
 
 ROOT = Path(__file__).parent
@@ -49,6 +49,39 @@ class SnapParserTests(unittest.TestCase):
             'B.Hoffman',
             ('60', '100', '6', '20', '0', '0'),
         )
+
+    def test_duplicate_short_name_uses_compatible_position(self):
+        players_csv = Path('/Users/ohri/Downloads/2026/w6/players.csv')
+        if not players_csv.exists():
+            self.skipTest(f"local player database not found: {players_csv}")
+
+        short_name_db, players_db = load_players_database(str(players_csv))
+        gsis_id, strategy = match_player_to_database(
+            'D.Key', 'Denver Broncos', 'DB', short_name_db, players_db
+        )
+        self.assertEqual(gsis_id, '00-0036683')
+        self.assertEqual(strategy, 'short_name_team_position')
+
+    def test_apostrophe_name_is_preserved_for_status_and_snaps(self):
+        pdf_path = Path('/Users/ohri/Downloads/2026/w6/w6houjax.pdf')
+        players_csv = Path('/Users/ohri/Downloads/2026/w6/players.csv')
+        if not pdf_path.exists() or not players_csv.exists():
+            self.skipTest('local Houston-Jacksonville fixture not found')
+
+        players, _, _, _, snaps = extract_players_from_pdf(str(pdf_path))
+        status_rows = [row for row in players if row['name'] == "H.To'oTo'o"]
+        snap_rows = [row for row in snaps if row['name'] == "H.To'oTo'o"]
+        self.assertEqual(len(status_rows), 1)
+        self.assertEqual(status_rows[0]['status'], 'starter')
+        self.assertEqual(len(snap_rows), 1)
+        self.assertEqual(snap_rows[0]['defense_snaps'], '70')
+        self.assertEqual(snap_rows[0]['defense_pct'], '99')
+
+        short_name_db, players_db = load_players_database(str(players_csv))
+        gsis_id, _ = match_player_to_database(
+            "H.To'oTo'o", 'Houston Texans', 'LB', short_name_db, players_db
+        )
+        self.assertEqual(gsis_id, '00-0038599')
 
 
 if __name__ == '__main__':

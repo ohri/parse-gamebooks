@@ -13,7 +13,8 @@ import sys
 PLAYER_PATTERN = re.compile(
     r"([A-Z/]+)\s+(\d+)\s+"
     r"([A-Z][a-z]*\.(?:[A-Z](?:[a-z]+)?\.?\s*)*"
-    r"[-']?[A-Z][a-z]+(?:\s+[A-Z][a-z]+|[-'][A-Z][a-z]+)*)"
+    r"[A-Z](?:[a-z][A-Za-z]*|(?=['-]))(?:['-][A-Za-z]+)*"
+    r"(?:\s+[A-Z](?:[a-z][A-Za-z]*|(?=['-]))(?:['-][A-Za-z]+)*)*)"
 )
 
 ANSI_COLORS = {
@@ -256,6 +257,26 @@ def get_team_abbr(team_name):
     }
     return team_mapping.get(team_name, '')
 
+def positions_match(gamebook_position, database_position):
+    """Return whether two position labels describe the same player group."""
+    if gamebook_position == database_position:
+        return True
+
+    compatible_positions = {
+        frozenset(('DB', 'SAF')),
+        frozenset(('S', 'SAF')),
+        frozenset(('CB', 'DB')),
+        frozenset(('DL', 'DE')),
+        frozenset(('DL', 'DT')),
+        frozenset(('DL', 'NT')),
+        frozenset(('LB', 'ILB')),
+        frozenset(('LB', 'OLB')),
+        frozenset(('OL', 'C')),
+        frozenset(('OL', 'G')),
+        frozenset(('OL', 'T')),
+    }
+    return frozenset((gamebook_position, database_position)) in compatible_positions
+
 def match_player_to_database(player_name, team_name, position, short_name_db, players_db):
     """Match a player to the database and return their GSIS ID and match strategy."""
     team_abbr = get_team_abbr(team_name)
@@ -268,7 +289,7 @@ def match_player_to_database(player_name, team_name, position, short_name_db, pl
         # Try to find exact position match first
         for player_data in player_list:
             db_position = player_data.get('position', '')
-            if db_position == position:
+            if positions_match(position, db_position):
                 return player_data['gsis_id'], 'short_name_team_position'
         # If no position match, keep first candidate
         if player_list:
@@ -280,7 +301,7 @@ def match_player_to_database(player_name, team_name, position, short_name_db, pl
         # Try to find exact position match first
         for player_data in player_list:
             db_position = player_data.get('position', '')
-            if db_position == position:
+            if positions_match(position, db_position):
                 return player_data['gsis_id'], 'other_name_team_position'
         # If no position match, keep first candidate
         candidate = player_list[0]['gsis_id'] if player_list else None
@@ -314,7 +335,7 @@ def match_player_to_database(player_name, team_name, position, short_name_db, pl
             if prefixed_players:
                 player_list = prefixed_players
         for player_data in player_list:
-            if player_data.get('position', '') == position:
+            if positions_match(position, player_data.get('position', '')):
                 return player_data['gsis_id'], 'short_name_abbreviated_initial_team_position'
         if player_list:
             return player_list[0]['gsis_id'], 'short_name_abbreviated_initial_team'
@@ -329,7 +350,7 @@ def match_player_to_database(player_name, team_name, position, short_name_db, pl
             if prefixed_players:
                 player_list = prefixed_players
         for player_data in player_list:
-            if player_data.get('position', '') == position:
+            if positions_match(position, player_data.get('position', '')):
                 return player_data['gsis_id'], 'other_name_abbreviated_initial_team_position'
         if player_list:
             return player_list[0]['gsis_id'], 'other_name_abbreviated_initial_team'
@@ -341,7 +362,7 @@ def match_player_to_database(player_name, team_name, position, short_name_db, pl
             # Check position first
             for player_data in player_list:
                 db_position = player_data.get('position', '')
-                if db_position == position:
+                if positions_match(position, db_position):
                     return player_data['gsis_id'], 'short_name_no_spaces_position'
             # Return first match if position doesn't match
             return player_list[0]['gsis_id'], 'short_name_no_spaces'
@@ -352,7 +373,7 @@ def match_player_to_database(player_name, team_name, position, short_name_db, pl
             # Check position first
             for player_data in player_list:
                 db_position = player_data.get('position', '')
-                if db_position == position:
+                if positions_match(position, db_position):
                     return player_data['gsis_id'], 'other_name_no_spaces_position'
             # Return first match if position doesn't match
             return player_list[0]['gsis_id'], 'other_name_no_spaces'
@@ -366,7 +387,7 @@ def match_player_to_database(player_name, team_name, position, short_name_db, pl
                 # Check position first
                 for player_data in player_list:
                     db_position = player_data.get('position', '')
-                    if db_position == position:
+                    if positions_match(position, db_position):
                         return player_data['gsis_id'], 'short_name_partial_lastname_position'
                 # Return first match if position doesn't match
                 return player_list[0]['gsis_id'], 'short_name_partial_lastname'
@@ -376,7 +397,7 @@ def match_player_to_database(player_name, team_name, position, short_name_db, pl
                 # Check position first
                 for player_data in player_list:
                     db_position = player_data.get('position', '')
-                    if db_position == position:
+                    if positions_match(position, db_position):
                         return player_data['gsis_id'], 'other_name_partial_lastname_position'
                 # Return first match if position doesn't match
                 return player_list[0]['gsis_id'], 'other_name_partial_lastname'
