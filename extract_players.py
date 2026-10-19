@@ -544,7 +544,7 @@ def _snap_values_by_unit(words, unit_headings):
     return values
 
 
-def _unit_heading_centers(page_words, unit):
+def _unit_heading_centers(page_words, unit, heading_top=None):
     """Return centers for a unit heading, including the full ST label.
 
     In the gamebook PDF, ``Special Teams`` is emitted as two words.  Using
@@ -552,7 +552,9 @@ def _unit_heading_centers(page_words, unit):
     toward the preceding defense columns, especially for snap-count cells.
     """
     centers = []
-    words = [word for word in page_words if word['text'].lower() == unit]
+    words = [word for word in page_words
+             if word['text'].lower() == unit
+             and (heading_top is None or abs(word['top'] - heading_top) <= 2)]
     for word in words:
         if unit != 'special':
             centers.append((word['x0'] + word['x1']) / 2)
@@ -633,15 +635,32 @@ def extract_snaps_from_pdf(pdf, teams):
         page_words = [word for word in words if word['top'] >= playtime_top]
         lines = _group_words_by_line(page_words)
 
+        headers = _find_team_headers(page_words, teams)
+        if not headers:
+            continue
+
+        # The subtitle also contains the words "offense", "defense", and
+        # "special teams". Select the actual table-header row below the team
+        # headers so those subtitle coordinates cannot affect column mapping.
+        team_header_bottom = max(header['top'] for header in headers)
+        heading_top = None
+        for line in lines:
+            line_top = line[0]['top']
+            line_text = {word['text'].lower() for word in line}
+            if line_top >= team_header_bottom and {
+                'offense', 'defense', 'special', 'teams'
+            }.issubset(line_text):
+                heading_top = line_top
+                break
+
         # Unit headings are positioned above the values they describe. Keeping
         # their x-coordinates lets this work for both one-column and two-column
         # gamebook layouts, including blank metric cells.
         unit_words = {
-            'offense': _unit_heading_centers(page_words, 'offense'),
-            'defense': _unit_heading_centers(page_words, 'defense'),
-            'special_teams': _unit_heading_centers(page_words, 'special'),
+            'offense': _unit_heading_centers(page_words, 'offense', heading_top),
+            'defense': _unit_heading_centers(page_words, 'defense', heading_top),
+            'special_teams': _unit_heading_centers(page_words, 'special', heading_top),
         }
-        headers = _find_team_headers(page_words, teams)
         if not headers or not all(unit_words.values()):
             continue
 

@@ -27,13 +27,12 @@ class SnapParserTests(unittest.TestCase):
         )
         self.assertEqual(actual, expected)
 
-    def test_special_teams_does_not_become_offense(self):
-        # The old left-edge heading lookup classified Atlanta's defense cells
-        # as offense cells in this two-team table.
+    def test_special_teams_does_not_become_defense_or_offense(self):
+        # Rows with no defense values should retain their special-teams cells.
         self.assert_snap(
             'w5balatl.pdf',
             'M.Bergeron',
-            ('64', '100', '5', '17', '0', '0'),
+            ('64', '100', '0', '0', '5', '17'),
         )
 
     def test_special_teams_column_is_preserved(self):
@@ -47,7 +46,7 @@ class SnapParserTests(unittest.TestCase):
         self.assert_snap(
             'w5indpit.pdf',
             'B.Hoffman',
-            ('60', '100', '6', '20', '0', '0'),
+            ('60', '100', '0', '0', '6', '20'),
         )
 
     def test_duplicate_short_name_uses_compatible_position(self):
@@ -82,6 +81,21 @@ class SnapParserTests(unittest.TestCase):
             "H.To'oTo'o", 'Houston Texans', 'LB', short_name_db, players_db
         )
         self.assertEqual(gsis_id, '00-0038599')
+
+    def test_playtime_subtitle_does_not_shift_special_teams_columns(self):
+        pdf_path = Path('/Users/ohri/Downloads/2026/w6/w6tenind.pdf')
+        if not pdf_path.exists():
+            self.skipTest(f"local gamebook fixture not found: {pdf_path}")
+
+        _, _, _, _, snaps = extract_players_from_pdf(str(pdf_path))
+        matches = [row for row in snaps if row['name'] == 'A.Haulcy']
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(
+            tuple(matches[0][field] for field in (
+                'defense_snaps', 'defense_pct', 'st_snaps', 'st_pct'
+            )),
+            ('40', '87', '3', '11'),
+        )
 
 
 if __name__ == '__main__':
